@@ -114,7 +114,6 @@ print("Shape of validation images:",validation_high_image.shape)
 
 # In[24]:
 
-
 import tensorflow as tf
 from tensorflow.keras import layers as L
 from tensorflow.keras import Model, Input
@@ -133,7 +132,6 @@ class ResizeByScale(L.Layer):
         h = tf.shape(x)[1]; w = tf.shape(x)[2]
         nh = tf.cast(tf.round(tf.cast(h, tf.float32) * self.scale), tf.int32)
         nw = tf.cast(tf.round(tf.cast(w, tf.float32) * self.scale), tf.int32)
-        # upcast to f32 for resize (and antialias path), then cast back
         x_f32 = tf.cast(x, tf.float32)
         y = tf.image.resize(x_f32, size=[nh, nw], method=self.method, antialias=self.antialias)
         return tf.cast(y, x_dtype)
@@ -164,6 +162,7 @@ class ResizeToMatch(L.Layer):
         cfg.update({"method": self.method, "antialias": self.antialias})
         return cfg
 
+
 def conv_block(inputs, nf):
     # LayerNorm is more stable than BN for very small batches
     x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs)
@@ -172,14 +171,17 @@ def conv_block(inputs, nf):
     x = L.LayerNormalization(axis=-1)(x); x = L.Activation("relu")(x)
     return x
 
+
 DOWNSCALE = 0.6
-down     = ResizeByScale(DOWNSCALE, method="bilinear", antialias=True, name="enc_down")
-up_to    = ResizeToMatch(method="bilinear", antialias=True, name="dec_up")
+down  = ResizeByScale(DOWNSCALE, method="bilinear", antialias=True, name="enc_down")
+up_to = ResizeToMatch(method="bilinear", antialias=True, name="dec_up")
+
 
 def encoder_block(inputs, nf):
     x = conv_block(inputs, nf)
     p = down(x)
     return x, p
+
 
 def decoder_block(inputs, skip_features, nf):
     x = up_to([inputs, skip_features])
@@ -188,29 +190,20 @@ def decoder_block(inputs, skip_features, nf):
     x = conv_block(x, nf)
     return x
 
-# ---- NEW: Serializable PixelShuffle layer (replaces Lambda) ----
-@register_keras_serializable(package="upsample")
-class PixelShuffle(L.Layer):
-    def __init__(self, r=2, **kwargs):
-        super().__init__(**kwargs)
-        self.r = int(r)
-    def call(self, x):
-        return tf.nn.depth_to_space(x, block_size=self.r)
-    def get_config(self):
-        cfg = super().get_config()
-        cfg.update({"r": self.r})
-        return cfg
 
-# Sub-pixel (pixel-shuffle) upsampling for final 2x  (no Lambda anymore)
-def subpixel_block(x, r=2, nf=64):
-    x = L.Conv2D(nf * (r*r), 3, padding='same')(x)
-    x = PixelShuffle(r=r, name=f"pixel_shuffle_x{r}")(x)
-    x = L.Activation('relu')(x)
-    return x
-# ---------------------------------------------------------------
 
-# --- replace the final head with a same-size residual head ---
+# ---- NEW: safe replacement for Lambda(_clip_add) ----
+@register_keras_serializable(package="utils")
+class ClipAdd(L.Layer):
+    """Add residual to input and clip to [0,1], preserving input dtype."""
+    def call(self, inputs):
+        inp, r = inputs
+        y = tf.cast(inp, tf.float32) + tf.cast(r, tf.float32)
+        y = tf.clip_by_value(y, 0.0, 1.0)
+        return tf.cast(y, inp.dtype)
 
+
+# --- build model with same-size residual head, no Lambda ---
 def build_super_resolution_unet(input_shape=(256, 256, 3)):
     inputs = Input(shape=input_shape)
     s1, p1 = encoder_block(inputs,  64)
@@ -224,33 +217,22 @@ def build_super_resolution_unet(input_shape=(256, 256, 3)):
     d3 = decoder_block(d2, s2, 128)
     d4 = decoder_block(d3, s1,  64)
 
-    # ---- SAME-SIZE HEAD (no PixelShuffle) ----
-    # Option A: residual prediction (recommended)
+    # Residual head
     x = conv_block(d4, 64)
-    # predict a small residual; zero init => start near identity
-    res = L.Conv2D(3, 1, padding="same",
-                   kernel_initializer="zeros", bias_initializer="zeros",
-                   name="residual_rgb")(x)
+    res = L.Conv2D(
+        3, 1, padding="same",
+        kernel_initializer="zeros", bias_initializer="zeros",
+        name="residual_rgb"
+    )(x)
 
-    # clip to [0,1] after adding the residual
-    def _clip_add(t):
-        inp, r = t
-        y = tf.cast(inp, tf.float32) + tf.cast(r, tf.float32)
-        y = tf.clip_by_value(y, 0.0, 1.0)
-        return tf.cast(y, inp.dtype)
-
-    outputs = L.Lambda(_clip_add, name="enhanced_rgb")([inputs, res])
-
-    # ---- Option B (simpler): direct regression head (uncomment if preferred) ----
-    # x = conv_block(d4, 64)
-    # outputs = L.Activation("sigmoid")(L.Conv2D(3, 1, padding="same")(x))
+    # SAFE: custom layer instead of Lambda
+    outputs = ClipAdd(name="enhanced_rgb")([inputs, res])
 
     return Model(inputs, outputs, name="U-Net_SR_same_size")
 
+
 model = build_super_resolution_unet((256, 256, 3))
 model.summary()
-
-
 # In[25]:
 
 
