@@ -30,22 +30,19 @@ MODELDIR="$REPO_DIR/models"
 mkdir -p "$LOGDIR" "$MODELDIR"
 
 # ─── Python / Env ──────────────────────────────────────────────────────────────
-if [ -d "/home/knarwani/.venvs/sr-unet" ]; then
-  source "/home/knarwani/.venvs/sr-unet/bin/activate"
-fi
-
-
+source "/home/knarwani/thesis/super-resolution/.venv/bin/activate"
 # ─── Runtime env tweaks (safe defaults for TF) ─────────────────────────────────
 export PYTHONUNBUFFERED=1
 export TF_CPP_MIN_LOG_LEVEL=2
 export TF_FORCE_GPU_ALLOW_GROWTH=true
-
-
+# Threading tuned to the CPUs you requested
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTEROP_THREADS=2
 
-
+# (Optional) Make sure scratch data is reachable; print for debugging.
+echo "[data] scratch: /scratch/$USER"
+du -sh "/scratch/$USER" 2>/dev/null || true
 
 # ─── Sanity info ───────────────────────────────────────────────────────────────
 python - <<'PY'

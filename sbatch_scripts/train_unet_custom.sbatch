@@ -29,7 +29,7 @@ MODELDIR="$REPO_DIR/models"
 
 mkdir -p "$LOGDIR" "$MODELDIR"
 
-source "/home/knarwani/.venvs/sr-unet/bin/activate" || true
+source "/home/knarwani/thesis/super-resolution/.venv/bin/activate" 
 export PYTHONUNBUFFERED=1
 export TF_CPP_MIN_LOG_LEVEL=2
 export TF_FORCE_GPU_ALLOW_GROWTH=true
@@ -37,8 +37,8 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTEROP_THREADS=2
 
-
-export SR_BASE="/scratch/knarwani/super-resolution"  
+# New: push caches and our base dir to scratch
+export SR_BASE="/scratch/knarwani/super-resolution"   # <-- used by make_callbacks()
 export TMPDIR="/scratch/knarwani/super-resolution/tmp"
 export KERAS_HOME="/scratch/knarwani/.keras"
 

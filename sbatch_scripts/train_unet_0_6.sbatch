@@ -30,9 +30,7 @@ MODELDIR="$REPO_DIR/models"
 mkdir -p "$LOGDIR" "$MODELDIR"
 
 # ─── Python / Env ──────────────────────────────────────────────────────────────
-if [ -d "/home/knarwani/.venvs/sr-unet" ]; then
-  source "/home/knarwani/.venvs/sr-unet/bin/activate"
-fi
+source "/home/knarwani/thesis/super-resolution/.venv/bin/activate"
 
 
 # ─── Runtime env tweaks (safe defaults for TF) ─────────────────────────────────
