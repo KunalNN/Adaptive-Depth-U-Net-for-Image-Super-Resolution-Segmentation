@@ -143,16 +143,6 @@ def build_super_resolution_unet(input_shape=(256, 256, 3)):
     d3 = decoder_block(d2, s2, 128)
     d4 = decoder_block(d3, s1,  64)  # back to 256×256 here
 
-    # ---- SAME-SIZE HEAD (no upscaling) ----
-    # Recommended: residual enhancement (keeps identity at init)
-    # res = Conv2D(3, 1, padding="same",
-    #              kernel_initializer="zeros", bias_initializer="zeros",
-    #              name="residual_rgb")(d4)
-    # outputs = Lambda(
-    #     lambda t: tf.clip_by_value(tf.cast(t[0], tf.float32) + tf.cast(t[1], tf.float32), 0.0, 1.0),
-    #     name="enhanced_rgb"
-    # )([inputs, res])
-
     outputs = Activation("sigmoid")(Conv2D(3, 1, padding="same")(d4))
 
     return Model(inputs, outputs, name="U-Net_SR_256x256_same_size")
