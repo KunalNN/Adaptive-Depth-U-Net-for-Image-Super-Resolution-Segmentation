@@ -1,401 +1,394 @@
-#!/usr/bin/env python
-# coding: utf-8
+#!/usr/bin/env python3
+"""
+Optuna-driven hyperparameter tuning for the vanilla super-resolution U-Net.
 
-# ![Screenshot 2021-11-27 at 4.02.39 PM.png](attachment:130a46f2-9046-4106-b324-1983094c922f.png)
+This script searches learning rate and loss weights, then trains a final model
+with the best-found configuration.
+"""
 
-# In[2]:
+from __future__ import annotations
 
-
-import os 
-import re 
-from scipy import ndimage, misc 
-from tqdm import tqdm
-from tensorflow.keras.preprocessing.image import img_to_array
-
-
-from skimage.transform import resize, rescale
-import matplotlib.pyplot as plt
-import numpy as np
-np. random. seed(0)
-import cv2 as cv2
-
-import tensorflow as tf
-from tensorflow.keras.layers import Input, Dense ,Conv2D,MaxPooling2D ,Dropout, Activation,BatchNormalization,MaxPool2D,Concatenate,Flatten, Lambda
-from tensorflow.keras.layers import Conv2DTranspose, UpSampling2D, add
-from tensorflow.keras.models import Model
-from tensorflow.keras import regularizers
-from tensorflow.keras.utils import plot_model
-import tensorflow as tf
-from tensorflow.keras.applications import VGG19
-
-# Optuna import
+import argparse
 import tempfile
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Tuple
+
+import cv2
+import numpy as np
 import optuna
+import tensorflow as tf
+from optuna.integration import TFKerasPruningCallback
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
-from optuna.integration import TFKerasPruningCallback
-
-print(tf.__version__)
-
-
-# ![Screenshot 2021-11-27 at 4.04.31 PM.png](attachment:8dcd3305-b356-4f8e-ba85-662cf89fbe62.png)
-
-# In[3]:
+from tensorflow.keras import Input, Model, layers as L
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.optimizers import Adam
 
 
-# to get the files in proper order
-def sorted_alphanumeric(data):  
-    convert = lambda text: int(text) if text.isdigit() else text.lower()
-    alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)',key)]
-    return sorted(data,key = alphanum_key)
-# defining the size of the image
-SIZE = 256
-high_img = []
-path = '/Users/kunalnarwani/Desktop/Thesis/super-resolution/dataset/Raw Data/high_res' 
-files = os.listdir(path)
-files = sorted_alphanumeric(files)
-for i in tqdm(files):    
-    if i == '855.png':
-        break
-    else:    
-        img = cv2.imread(path + '/'+i,1)
-        # open cv reads images in BGR format so we have to convert it to RGB
+# -----------------------------------------------------------------------------
+# Data utilities
+# -----------------------------------------------------------------------------
+
+def sorted_alphanumeric(items: Iterable[str]) -> List[str]:
+    """Sort strings so that 10 follows 9 instead of 1."""
+
+    def tokenize(token: str):
+        return int(token) if token.isdigit() else token.lower()
+
+    def split_key(text: str):
+        token = ""
+        tokens: List[str] = []
+        for char in text:
+            if char.isdigit():
+                if token and not token[-1].isdigit():
+                    tokens.append(token)
+                    token = ""
+                token += char
+            else:
+                if token and token[-1].isdigit():
+                    tokens.append(token)
+                    token = ""
+                token += char
+        if token:
+            tokens.append(token)
+        return [tokenize(part) for part in tokens]
+
+    return sorted(items, key=split_key)
+
+
+def load_image_stack(directory: Path, size: int, limit: int | None = None) -> np.ndarray:
+    """Load and normalise images from a directory into an array of shape (N, H, W, 3)."""
+    paths = sorted_alphanumeric([p.name for p in directory.iterdir() if p.is_file()])
+    if limit is not None:
+        paths = paths[:limit]
+
+    images: List[np.ndarray] = []
+    for filename in paths:
+        img = cv2.imread(str(directory / filename), cv2.IMREAD_COLOR)
+        if img is None:
+            raise FileNotFoundError(f"Unable to read image: {directory / filename}")
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        #resizing image
-        img = cv2.resize(img, (SIZE, SIZE))
-        img = img.astype('float32') / 255.0
-        high_img.append(img_to_array(img))
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+        img = img.astype(np.float32) / 255.0
+        images.append(img)
+
+    if not images:
+        raise ValueError(f"No images found in {directory}")
+
+    return np.stack(images, axis=0)
 
 
-low_img = []
-path = '/Users/kunalnarwani/Desktop/Thesis/super-resolution/dataset/Raw Data/low_res'
-files = os.listdir(path)
-files = sorted_alphanumeric(files)
-for i in tqdm(files):
-    if i == '855.png':
-        break
-    else: 
-        img = cv2.imread(path + '/'+i,1)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        #resizing image
-        img = cv2.resize(img, (SIZE, SIZE))
-        img = img.astype('float32') / 255.0
-        low_img.append(img_to_array(img))
+def split_indices(n_samples: int, train: float, val: float, test: float, seed: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split indices into train/val/test using provided fractions."""
+    if not 0 < train < 1:
+        raise ValueError("Train fraction should be between 0 and 1.")
+    if not 0 <= val < 1 or not 0 <= test < 1:
+        raise ValueError("Val/test fractions should be between 0 and 1.")
+    total = train + val + test
+    if total <= 0:
+        raise ValueError("Fractions must sum to a positive value.")
 
-train_high_image = high_img[:700]
-train_low_image = low_img[:700]
-train_high_image = np.reshape(train_high_image,(len(train_high_image),SIZE,SIZE,3))
-train_low_image = np.reshape(train_low_image,(len(train_low_image),SIZE,SIZE,3))
+    rng = np.random.default_rng(seed)
+    indices = np.arange(n_samples)
+    rng.shuffle(indices)
 
-validation_high_image = high_img[700:810]
-validation_low_image = low_img[700:810]
-validation_high_image= np.reshape(validation_high_image,(len(validation_high_image),SIZE,SIZE,3))
-validation_low_image = np.reshape(validation_low_image,(len(validation_low_image),SIZE,SIZE,3))
+    train_count = int(round(n_samples * train / total))
+    val_count = int(round(n_samples * val / total))
+    train_count = min(train_count, n_samples - 2) if n_samples > 2 else train_count
+    val_count = min(val_count, n_samples - train_count - 1) if n_samples > (train_count + 1) else val_count
+    test_count = n_samples - train_count - val_count
 
+    if train_count <= 0:
+        raise ValueError("Train split is empty; adjust fractions.")
 
-test_high_image = high_img[810:]
-test_low_image = low_img[810:]
-test_high_image= np.reshape(test_high_image,(len(test_high_image),SIZE,SIZE,3))
-test_low_image = np.reshape(test_low_image,(len(test_low_image),SIZE,SIZE,3))
-
-print("Shape of training images:",train_high_image.shape)
-print("Shape of test images:",test_high_image.shape)
-print("Shape of validation images:",validation_high_image.shape)
+    train_idx = indices[:train_count]
+    val_idx = indices[train_count:train_count + val_count]
+    test_idx = indices[train_count + val_count:]
+    return train_idx, val_idx, test_idx
 
 
-# # ARCITECTURE OF MODEL 
-# 
+def make_tf_dataset(
+    lr_images: np.ndarray,
+    hr_images: np.ndarray,
+    indices: Sequence[int],
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+) -> tf.data.Dataset:
+    ds = tf.data.Dataset.from_tensor_slices((lr_images[indices], hr_images[indices]))
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(indices), seed=seed, reshuffle_each_iteration=True)
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
-# In[ ]:
 
+# -----------------------------------------------------------------------------
+# Model definition
+# -----------------------------------------------------------------------------
 
-# ---------------- Blocks ---------------- #
-def conv_block(inputs, num_filters):
-    x = Conv2D(num_filters, 3, padding="same")(inputs)
-    x = BatchNormalization()(x)
-    x = Activation("relu")(x)
-    x = Conv2D(num_filters, 3, padding="same")(x)
-    x = BatchNormalization()(x)
-    x = Activation("relu")(x)
+def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
+    x = L.Conv2D(nf, 3, padding="same")(inputs)
+    x = L.BatchNormalization()(x)
+    x = L.Activation("relu")(x)
+    x = L.Conv2D(nf, 3, padding="same")(x)
+    x = L.BatchNormalization()(x)
+    x = L.Activation("relu")(x)
     return x
 
-def encoder_block(inputs, num_filters):
-    x = conv_block(inputs, num_filters)
-    p = MaxPool2D(pool_size=(2, 2))(x)   # /2
-    return x, p
 
-def decoder_block(inputs, skip_features, num_filters):
-    x = UpSampling2D(size=(2, 2), interpolation='bilinear')(inputs)  # ×2
-    x = Conv2D(num_filters, 3, padding='same', activation='relu')(x)
-    x = Concatenate()([x, skip_features])
-    x = conv_block(x, num_filters)
-    return x
+def encoder_block(inputs: tf.Tensor, nf: int) -> Tuple[tf.Tensor, tf.Tensor]:
+    x = conv_block(inputs, nf)
+    pooled = L.MaxPool2D(pool_size=(2, 2))(x)
+    return x, pooled
 
-# ------------- Model (256 -> 256) ------------- #
-def build_super_resolution_unet(input_shape=(256, 256, 3)):
-    inputs = Input(shape=input_shape)
 
-    # Encoder: 256 -> 128 -> 64 -> 32 -> 16
-    s1, p1 = encoder_block(inputs,   64)   # 256
-    s2, p2 = encoder_block(p1,      128)   # 128
-    s3, p3 = encoder_block(p2,      256)   # 64
-    s4, p4 = encoder_block(p3,      512)   # 32
+def decoder_block(inputs: tf.Tensor, skip: tf.Tensor, nf: int) -> tf.Tensor:
+    x = L.UpSampling2D(size=(2, 2), interpolation="bilinear")(inputs)
+    x = L.Conv2D(nf, 3, padding="same", activation="relu")(x)
+    x = L.Concatenate()([x, skip])
+    return conv_block(x, nf)
 
-    # Bridge at 16×16
-    b1 = conv_block(p4, 1024)
 
-    # Decoder: 16 -> 32 -> 64 -> 128 -> 256
-    d1 = decoder_block(b1, s4, 512)
+def build_super_resolution_unet(input_shape: Tuple[int, int, int]) -> Model:
+    inputs = Input(shape=input_shape, name="low_res_input")
+
+    s1, p1 = encoder_block(inputs, 64)
+    s2, p2 = encoder_block(p1, 128)
+    s3, p3 = encoder_block(p2, 256)
+    s4, p4 = encoder_block(p3, 512)
+
+    bottleneck = conv_block(p4, 1024)
+
+    d1 = decoder_block(bottleneck, s4, 512)
     d2 = decoder_block(d1, s3, 256)
     d3 = decoder_block(d2, s2, 128)
-    d4 = decoder_block(d3, s1,  64)  # back to 256×256 here
+    d4 = decoder_block(d3, s1, 64)
 
-    outputs = Activation("sigmoid")(Conv2D(3, 1, padding="same")(d4))
-
-    return Model(inputs, outputs, name="U-Net_SR_256x256_same_size")
-
-# Quick check
-if __name__ == "__main__":
-    model = build_super_resolution_unet((256, 256, 3))
-    y = model(tf.zeros([1, 256, 256, 3]))
-    print("Output shape:", y.shape)  # (1, 256, 256, 3)
+    outputs = L.Conv2D(3, 1, padding="same", activation="sigmoid", name="enhanced_rgb")(d4)
+    return Model(inputs, outputs, name="U-Net_SR_256x256")
 
 
-# In[22]:
-
-
-vgg = VGG19(include_top=False, weights="imagenet", input_shape=(256, 256, 3))
-vgg.trainable = False
-feat_extractor = tf.keras.Model(
-    inputs=vgg.input,
-    outputs=vgg.get_layer("block4_conv4").output,
-)
-
-
-# In[27]:
-
-
-from tensorflow.keras.applications import VGG19
-from tensorflow.keras.applications.vgg19 import preprocess_input
-import tensorflow as tf
-
-def build_feat_extractor():
-    # Create a frozen VGG19 backbone for perceptual loss
-    vgg = VGG19(include_top=False, weights="imagenet", input_shape=(256, 256, 3))
+def build_feature_extractor(input_size: int) -> Model:
+    vgg = tf.keras.applications.VGG19(include_top=False, weights="imagenet", input_shape=(input_size, input_size, 3))
     vgg.trainable = False
-    return tf.keras.Model(inputs=vgg.input,
-                          outputs=vgg.get_layer("block4_conv4").output)
+    return Model(inputs=vgg.input, outputs=vgg.get_layer("block4_conv4").output)
 
-def make_combined_loss(alpha=1.0, beta=0.1, gamma=0.01, feat_extractor=None):
-    alpha = tf.cast(alpha, tf.float32)
-    beta  = tf.cast(beta,  tf.float32)
-    gamma = tf.cast(gamma, tf.float32)
 
-    # define helpers INSIDE so they capture feat_extractor correctly
-    def mse_loss(y_true, y_pred):
+def make_combined_loss(alpha: float, beta: float, gamma: float, feature_extractor: Model):
+    a = tf.constant(alpha, dtype=tf.float32)
+    b = tf.constant(beta, dtype=tf.float32)
+    g = tf.constant(gamma, dtype=tf.float32)
+
+    def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         y_true = tf.cast(y_true, tf.float32)
         y_pred = tf.cast(y_pred, tf.float32)
         return tf.reduce_mean(tf.square(y_true - y_pred))
 
-    def ssim_loss(y_true, y_pred):
+    def ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         y_true = tf.cast(y_true, tf.float32)
         y_pred = tf.cast(y_pred, tf.float32)
         return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
 
-    def perceptual_loss(y_true, y_pred):
-        # Keep in [0,1], convert to ImageNet preproc, no gradients through VGG
+    def perceptual_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         y_true = tf.cast(tf.clip_by_value(y_true, 0.0, 1.0), tf.float32)
         y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
-        ft = tf.stop_gradient(feat_extractor(preprocess_input(y_true * 255.0), training=False))
-        fp = tf.stop_gradient(feat_extractor(preprocess_input(y_pred * 255.0), training=False))
+        ft = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_true * 255.0), training=False)
+        fp = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_pred * 255.0), training=False)
         return tf.reduce_mean(tf.square(ft - fp))
 
-    def loss(y_true, y_pred):
-        return (
-            alpha * mse_loss(y_true, y_pred)
-            + beta  * ssim_loss(y_true, y_pred)
-            + gamma * perceptual_loss(y_true, y_pred)
-        )
+    def loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        mse_val = tf.cast(mse_loss(y_true, y_pred), tf.float32)
+        ssim_val = tf.cast(ssim_loss(y_true, y_pred), tf.float32)
+        perc_val = tf.cast(perceptual_loss(y_true, y_pred), tf.float32)
+        return a * mse_val + b * ssim_val + g * perc_val
 
+    loss.__name__ = "combined_loss"
     return loss
 
 
-# In[28]:
-
-
-# ===== Compile =====
-
-def psnr_metric(y_true, y_pred):
+def psnr_metric(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
     return tf.reduce_mean(tf.image.psnr(y_true, y_pred, max_val=1.0))
 
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-    loss=combined_loss,
-    metrics=[psnr_metric],
-)
+
+def evaluate(model: Model, dataset: tf.data.Dataset) -> Dict[str, Tuple[float, float]]:
+    psnr_vals, ssim_vals, msssim_vals = [], [], []
+    for lr_batch, hr_batch in dataset:
+        preds = tf.cast(tf.clip_by_value(model(lr_batch, training=False), 0.0, 1.0), tf.float32)
+        hr_batch = tf.cast(hr_batch, tf.float32)
+        psnr_vals.append(tf.image.psnr(hr_batch, preds, max_val=1.0).numpy())
+        ssim_vals.append(tf.image.ssim(hr_batch, preds, max_val=1.0).numpy())
+        msssim_vals.append(tf.image.ssim_multiscale(hr_batch, preds, max_val=1.0).numpy())
+
+    if not psnr_vals:
+        return {}
+
+    def mean_std(values: List[np.ndarray]) -> Tuple[float, float]:
+        arr = np.concatenate(values, axis=0).astype(np.float64)
+        return float(np.mean(arr)), float(np.std(arr))
+
+    return {
+        "psnr": mean_std(psnr_vals),
+        "ssim": mean_std(ssim_vals),
+        "ms_ssim": mean_std(msssim_vals),
+    }
 
 
-# In[29]:
+# -----------------------------------------------------------------------------
+# Optuna optimisation
+# -----------------------------------------------------------------------------
 
+def run_study(
+    args: argparse.Namespace,
+    lr_images: np.ndarray,
+    hr_images: np.ndarray,
+    train_idx: np.ndarray,
+    val_idx: np.ndarray,
+) -> optuna.Study:
+    def objective(trial: optuna.Trial) -> float:
+        tf.keras.backend.clear_session()
 
-import tempfile, os, numpy as np
-import optuna
-from optuna.pruners import MedianPruner
-from optuna.samplers import TPESampler
-from optuna.integration import TFKerasPruningCallback
+        lr = trial.suggest_float("lr", 1e-5, 5e-3, log=True)
+        alpha = trial.suggest_float("alpha", 0.5, 2.0)
+        beta = trial.suggest_float("beta", 1e-3, 0.5, log=True)
+        gamma = trial.suggest_float("gamma", 1e-4, 0.1, log=True)
+        batch_size = trial.suggest_categorical("batch_size", args.batch_sizes)
 
-def psnr_metric(y_true, y_pred):
-    y_true = tf.cast(y_true, tf.float32)
-    y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
-    return tf.reduce_mean(tf.image.psnr(y_true, y_pred, max_val=1.0))
+        train_ds = make_tf_dataset(lr_images, hr_images, train_idx, batch_size, shuffle=True, seed=args.seed)
+        val_ds = make_tf_dataset(lr_images, hr_images, val_idx, batch_size, shuffle=False, seed=args.seed)
 
-def build_tf_datasets(batch_size):
-    SEED = 42
-    train_ds = (
-        tf.data.Dataset.from_tensor_slices((train_low_image, train_high_image))
-          .shuffle(len(train_low_image), seed=SEED, reshuffle_each_iteration=True)
-          .batch(batch_size)
-          .prefetch(tf.data.AUTOTUNE)
+        feature_extractor = build_feature_extractor(args.hr_size)
+        model = build_super_resolution_unet((args.hr_size, args.hr_size, 3))
+        loss_fn = make_combined_loss(alpha, beta, gamma, feature_extractor)
+        model.compile(optimizer=Adam(learning_rate=lr), loss=loss_fn, metrics=[psnr_metric])
+
+        pruning_cb = TFKerasPruningCallback(trial, monitor="val_loss")
+        early_stop = EarlyStopping(monitor="val_loss", mode="min", patience=args.early_stop_patience, restore_best_weights=True, verbose=0)
+        tmp_dir = tempfile.mkdtemp()
+        checkpoint = ModelCheckpoint(
+            filepath=str(Path(tmp_dir) / "best.keras"),
+            monitor="val_loss",
+            mode="min",
+            save_best_only=True,
+            verbose=0,
+        )
+
+        history = model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=args.max_tuning_epochs,
+            callbacks=[early_stop, checkpoint, pruning_cb],
+            verbose=0,
+        )
+
+        return float(np.min(history.history["val_loss"]))
+
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=TPESampler(seed=args.seed),
+        pruner=MedianPruner(n_warmup_steps=args.pruner_warmup),
     )
-    valid_ds = (
-        tf.data.Dataset.from_tensor_slices((validation_low_image, validation_high_image))
-          .batch(batch_size)
-          .prefetch(tf.data.AUTOTUNE)
-    )
-    return train_ds, valid_ds
+    study.optimize(objective, n_trials=args.n_trials, show_progress_bar=args.show_progress)
+    return study
 
-def objective(trial: optuna.Trial):
-    # --- housekeeping ---
-    tf.keras.backend.clear_session()
 
-    # --- search space ---
-    lr = trial.suggest_float("lr", 1e-5, 5e-3, log=True)
-    alpha = trial.suggest_float("alpha", 0.5, 2.0)
-    beta  = trial.suggest_float("beta",  1e-3, 0.5, log=True)
-    gamma = trial.suggest_float("gamma", 1e-4, 0.1, log=True)
-    batch_size = trial.suggest_categorical("batch_size", [2, 4])
+def train_final_model(
+    args: argparse.Namespace,
+    lr_images: np.ndarray,
+    hr_images: np.ndarray,
+    train_idx: np.ndarray,
+    val_idx: np.ndarray,
+    best_params: Dict[str, float],
+) -> Model:
+    batch_size = int(best_params["batch_size"])
+    lr = float(best_params["lr"])
+    alpha = float(best_params["alpha"])
+    beta = float(best_params["beta"])
+    gamma = float(best_params["gamma"])
 
-    # --- data ---
-    train_ds, valid_ds = build_tf_datasets(batch_size)
+    train_ds = make_tf_dataset(lr_images, hr_images, train_idx, batch_size, shuffle=True, seed=args.seed)
+    val_ds = make_tf_dataset(lr_images, hr_images, val_idx, batch_size, shuffle=False, seed=args.seed)
 
-    # --- model + loss (feat_extractor local to this trial) ---
-    feat_extractor = build_feat_extractor()
-    model = build_super_resolution_unet((256, 256, 3))
-    loss_fn = make_combined_loss(alpha=alpha, beta=beta, gamma=gamma, feat_extractor=feat_extractor)
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
-                  loss=loss_fn,
-                  metrics=[psnr_metric])
+    feature_extractor = build_feature_extractor(args.hr_size)
+    model = build_super_resolution_unet((args.hr_size, args.hr_size, 3))
+    loss_fn = make_combined_loss(alpha, beta, gamma, feature_extractor)
+    model.compile(optimizer=Adam(learning_rate=lr), loss=loss_fn, metrics=[psnr_metric])
 
-    # --- callbacks ---
-    pruning_cb = TFKerasPruningCallback(trial, monitor="val_loss")
-    early_stop = tf.keras.callbacks.EarlyStopping(
-        monitor="val_loss", mode="min", patience=8, restore_best_weights=True, verbose=0
-    )
-    tmp_dir = tempfile.mkdtemp()
-    ckpt = tf.keras.callbacks.ModelCheckpoint(
-        filepath=os.path.join(tmp_dir, "best.keras"),
-        monitor="val_loss", mode="min", save_best_only=True, verbose=0
-    )
+    callbacks = [
+        EarlyStopping(monitor="val_loss", mode="min", patience=args.final_patience, restore_best_weights=True, verbose=1),
+        ModelCheckpoint(
+            filepath=str(Path(args.model_dir) / "unet_vanilla_optuna_best.keras"),
+            monitor="val_loss",
+            mode="min",
+            save_best_only=True,
+            verbose=1,
+        ),
+    ]
 
-    # --- train (shorter per trial) ---
-    history = model.fit(
+    model.fit(
         train_ds,
-        validation_data=valid_ds,
-        epochs=40,
-        callbacks=[early_stop, ckpt, pruning_cb],
-        verbose=0,
+        epochs=args.final_epochs,
+        validation_data=val_ds,
+        callbacks=callbacks,
+        verbose=2,
+    )
+    return model
+
+
+def main(args: argparse.Namespace) -> None:
+    tf.keras.utils.set_random_seed(args.seed)
+    Path(args.model_dir).mkdir(parents=True, exist_ok=True)
+
+    hr_images = load_image_stack(Path(args.high_res_dir), args.hr_size, limit=args.limit)
+    lr_images = load_image_stack(Path(args.low_res_dir), args.hr_size, limit=args.limit)
+    if hr_images.shape != lr_images.shape:
+        raise ValueError("High-resolution and low-resolution stacks must align one-to-one.")
+
+    train_idx, val_idx, test_idx = split_indices(
+        n_samples=hr_images.shape[0],
+        train=args.train_split,
+        val=args.val_split,
+        test=args.test_split,
+        seed=args.seed,
     )
 
-    return float(np.min(history.history["val_loss"]))
+    study = run_study(args, lr_images, hr_images, train_idx, val_idx)
+    print("Best val_loss:", study.best_value)
+    print("Best params:", study.best_params)
+
+    final_model = train_final_model(args, lr_images, hr_images, train_idx, val_idx, study.best_params)
+
+    if len(val_idx):
+        val_ds = make_tf_dataset(lr_images, hr_images, val_idx, args.eval_batch, shuffle=False, seed=args.seed)
+        print("Validation metrics:", evaluate(final_model, val_ds))
+
+    if len(test_idx):
+        test_ds = make_tf_dataset(lr_images, hr_images, test_idx, args.eval_batch, shuffle=False, seed=args.seed)
+        print("Test metrics:", evaluate(final_model, test_ds))
 
 
-# In[ ]:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Tune and train vanilla SR U-Net with Optuna.")
+    parser.add_argument("--high_res_dir", type=str, required=True, help="Directory containing high-resolution images.")
+    parser.add_argument("--low_res_dir", type=str, required=True, help="Directory containing low-resolution images.")
+    parser.add_argument("--hr_size", type=int, default=256)
+    parser.add_argument("--train_split", type=float, default=0.8)
+    parser.add_argument("--val_split", type=float, default=0.1)
+    parser.add_argument("--test_split", type=float, default=0.1)
+    parser.add_argument("--batch_sizes", type=int, nargs="+", default=[2, 4], help="Batch sizes to sample during tuning.")
+    parser.add_argument("--max_tuning_epochs", type=int, default=40)
+    parser.add_argument("--early_stop_patience", type=int, default=8)
+    parser.add_argument("--n_trials", type=int, default=25)
+    parser.add_argument("--pruner_warmup", type=int, default=5)
+    parser.add_argument("--show_progress", action="store_true", help="Show Optuna study progress bar.")
+    parser.add_argument("--final_epochs", type=int, default=100)
+    parser.add_argument("--final_patience", type=int, default=15)
+    parser.add_argument("--eval_batch", type=int, default=8)
+    parser.add_argument("--limit", type=int, default=None, help="Optional limit on number of pairs to load.")
+    parser.add_argument("--model_dir", type=str, default="models")
+    parser.add_argument("--seed", type=int, default=42)
+    return parser.parse_args()
 
 
-study = optuna.create_study(
-    direction="minimize",
-    sampler=TPESampler(seed=42),
-    pruner=MedianPruner(n_warmup_steps=5),
-)
-study.optimize(objective, n_trials=25, show_progress_bar=True)
-
-print("Best value (val_loss):", study.best_value)
-print("Best params:", study.best_params)
-
-
-# In[ ]:
-
-
-MODEL_DIR = "/Users/kunalnarwani/Desktop/Thesis/super-resolution/models"
-
-best = study.best_params
-final_bs = best["batch_size"]
-train_ds, valid_ds = build_tf_datasets(final_bs)
-
-final_model = build_super_resolution_unet((256, 256, 3))
-final_model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=best["lr"]),
-    loss=make_combined_loss(alpha=best["alpha"], beta=best["beta"], gamma=best["gamma"]),
-    metrics=[psnr_metric],
-)
-
-early_stop = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss", mode="min", patience=15, restore_best_weights=True, verbose=1
-)
-model_ckpt = tf.keras.callbacks.ModelCheckpoint(
-    filepath=os.path.join(MODEL_DIR, "best_by_val_loss_optuna.keras"),
-    monitor="val_loss", mode="min", save_best_only=True, verbose=1
-)
-
-history = final_model.fit(
-    train_ds,
-    epochs=100,                    
-    validation_data=valid_ds,
-    callbacks=[early_stop, model_ckpt],
-    verbose=2,
-)
-
-
-# In[ ]:
-
-
-EVAL_BATCH = 8  # adjust for GPU/CPU memory
-eval_ds = (
-    tf.data.Dataset.from_tensor_slices((validation_low_image, validation_high_image))
-      .batch(EVAL_BATCH)
-      .prefetch(tf.data.AUTOTUNE)
-)
-
-all_psnr, all_ssim, all_msssim = [], [], []
-n_images = 0
-
-for lr_b, hr_b in eval_ds:
-    pred_b = model(lr_b, training=False)
-
-    if pred_b.shape[1:3] != hr_b.shape[1:3]:  # still guards future changes
-        pred_b = tf.image.resize(pred_b, size=hr_b.shape[1:3], method="bicubic")
-
-    hr_tf   = tf.cast(hr_b, tf.float32)
-    pred_tf = tf.cast(tf.clip_by_value(pred_b, 0.0, 1.0), tf.float32)
-
-    all_psnr.append(tf.image.psnr(hr_tf, pred_tf, max_val=1.0).numpy())
-    all_ssim.append(tf.image.ssim(hr_tf, pred_tf, max_val=1.0).numpy())
-    all_msssim.append(tf.image.ssim_multiscale(hr_tf, pred_tf, max_val=1.0).numpy())
-
-    n_images += int(hr_b.shape[0])
-
-def mean_std(x):
-    x = np.concatenate(x, axis=0).astype(np.float64)
-    return float(np.mean(x)), float(np.std(x))
-
-m_psnr, s_psnr   = mean_std(all_psnr)
-m_ssim, s_ssim   = mean_std(all_ssim)
-m_msssim, s_msssim = mean_std(all_msssim)
-
-print(f"Validation images evaluated: {n_images}")
-print(f" PSNR    : {m_psnr:.4f} ± {s_psnr:.4f} dB")
-print(f" SSIM    : {m_ssim:.4f} ± {s_ssim:.4f}")
-print(f" MS-SSIM : {m_msssim:.4f} ± {s_msssim:.4f}")
-
+if __name__ == "__main__":
+    main(parse_args())

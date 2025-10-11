@@ -1,174 +1,301 @@
-#!/usr/bin/env python
-# coding: utf-8
-# Minimal U-Net training on fixed dataset paths (cluster-ready, no internet)
+#!/usr/bin/env python3
+"""
+Legacy U-Net baseline for single-image super-resolution.
 
-import os, re
-from tqdm import tqdm
-import numpy as np
-np.random.seed(0)
+This refactors the original notebook-exported code into a small CLI so the
+baseline can be reproduced without manual cell execution.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import cv2
-from tensorflow.keras.preprocessing.image import img_to_array
-
+import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import (Input, Conv2D, MaxPool2D, Activation,
-                                     BatchNormalization, UpSampling2D, Concatenate)
-from tensorflow.keras.models import Model
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras import Input, Model, layers as L
+from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint
+from tensorflow.keras.optimizers import Adam
 
-# =========================
-# 1) DATA LOADING (fixed)
-# =========================
-def sorted_alphanumeric(data):
-    convert = lambda text: int(text) if text.isdigit() else text.lower()
-    alphanum_key = lambda key: [convert(c) for c in re.split(r'([0-9]+)', key)]
-    return sorted(data, key=alphanum_key)
 
-SIZE = 256
+# -----------------------------------------------------------------------------
+# Data utilities
+# -----------------------------------------------------------------------------
 
-# High-res
-high_img = []
-hr_path = '/scratch/knarwani/super-resolution/dataset/Raw Data/high_res'
-files = sorted_alphanumeric(os.listdir(hr_path))
-for fname in tqdm(files, desc="HR"):
-    if fname == '855.png': break
-    img = cv2.imread(os.path.join(hr_path, fname), cv2.IMREAD_COLOR)  # BGR
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (SIZE, SIZE))
-    img = img.astype('float32') / 255.0
-    high_img.append(img_to_array(img))
+def sorted_alphanumeric(items: Iterable[str]) -> List[str]:
+    """Sort strings so that 10 follows 9 instead of 1."""
 
-# Low-res
-low_img = []
-lr_path = '/scratch/knarwani/super-resolution/dataset/Raw Data/low_res'
-files = sorted_alphanumeric(os.listdir(lr_path))
-for fname in tqdm(files, desc="LR"):
-    if fname == '855.png': break
-    img = cv2.imread(os.path.join(lr_path, fname), cv2.IMREAD_COLOR)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (SIZE, SIZE))
-    img = img.astype('float32') / 255.0
-    low_img.append(img_to_array(img))
+    def tokenize(token: str):
+        return int(token) if token.isdigit() else token.lower()
 
-# Splits (unchanged)
-train_high_image = np.asarray(high_img[:700], dtype=np.float32)
-train_low_image  = np.asarray( low_img[:700], dtype=np.float32)
+    def split_key(text: str):
+        token = ""
+        tokens: List[str] = []
+        for char in text:
+            if char.isdigit():
+                if token and not token[-1].isdigit():
+                    tokens.append(token)
+                    token = ""
+                token += char
+            else:
+                if token and token[-1].isdigit():
+                    tokens.append(token)
+                    token = ""
+                token += char
+        if token:
+            tokens.append(token)
+        return [tokenize(part) for part in tokens]
 
-validation_high_image = np.asarray(high_img[700:810], dtype=np.float32)
-validation_low_image  = np.asarray( low_img[700:810], dtype=np.float32)
+    return sorted(items, key=split_key)
 
-test_high_image = np.asarray(high_img[810:], dtype=np.float32)
-test_low_image  = np.asarray( low_img[810:], dtype=np.float32)
 
-print("TF:", tf.__version__)
-print("Shape of training images:", train_high_image.shape)
-print("Shape of test images:",      test_high_image.shape)
-print("Shape of validation images:",validation_high_image.shape)
+def load_image_stack(directory: Path, size: int, limit: int | None = None) -> np.ndarray:
+    """Load and normalise images from a directory into an array of shape (N, H, W, 3)."""
+    paths = sorted_alphanumeric([p.name for p in directory.iterdir() if p.is_file()])
+    if limit is not None:
+        paths = paths[:limit]
 
-# =========================
-# 2) MODEL
-# =========================
-def conv_block(inputs, n):
-    x = Conv2D(n, 3, padding="same")(inputs); x = BatchNormalization()(x); x = Activation("relu")(x)
-    x = Conv2D(n, 3, padding="same")(x);      x = BatchNormalization()(x); x = Activation("relu")(x)
+    images: List[np.ndarray] = []
+    for filename in paths:
+        img = cv2.imread(str(directory / filename), cv2.IMREAD_COLOR)
+        if img is None:
+            raise FileNotFoundError(f"Unable to read image: {directory / filename}")
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+        img = img.astype(np.float32) / 255.0
+        images.append(img)
+
+    if not images:
+        raise ValueError(f"No images found in {directory}")
+
+    return np.stack(images, axis=0)
+
+
+def split_indices(n_samples: int, train: float, val: float, test: float, seed: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split indices into train/val/test using the provided fractions."""
+    if not 0 < train < 1:
+        raise ValueError("Train fraction should be between 0 and 1.")
+    if not 0 <= val < 1 or not 0 <= test < 1:
+        raise ValueError("Val/test fractions should be between 0 and 1.")
+    total = train + val + test
+    if total <= 0:
+        raise ValueError("Fractions must sum to a positive value.")
+
+    rng = np.random.default_rng(seed)
+    indices = np.arange(n_samples)
+    rng.shuffle(indices)
+
+    train_count = int(round(n_samples * train / total))
+    val_count = int(round(n_samples * val / total))
+    train_count = min(train_count, n_samples - 2) if n_samples > 2 else train_count
+    val_count = min(val_count, n_samples - train_count - 1) if n_samples > (train_count + 1) else val_count
+    test_count = n_samples - train_count - val_count
+
+    if train_count <= 0:
+        raise ValueError("Train split is empty; adjust fractions.")
+
+    train_idx = indices[:train_count]
+    val_idx = indices[train_count:train_count + val_count]
+    test_idx = indices[train_count + val_count:]
+    return train_idx, val_idx, test_idx
+
+
+def make_tf_dataset(
+    lr_images: np.ndarray,
+    hr_images: np.ndarray,
+    indices: Sequence[int],
+    batch_size: int,
+    shuffle: bool,
+    seed: int,
+) -> tf.data.Dataset:
+    """Build a tf.data pipeline for the given subset indices."""
+    ds = tf.data.Dataset.from_tensor_slices((lr_images[indices], hr_images[indices]))
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(indices), seed=seed, reshuffle_each_iteration=True)
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+
+# -----------------------------------------------------------------------------
+# Model definition
+# -----------------------------------------------------------------------------
+
+def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
+    x = L.Conv2D(nf, 3, padding="same")(inputs)
+    x = L.BatchNormalization()(x)
+    x = L.Activation("relu")(x)
+    x = L.Conv2D(nf, 3, padding="same")(x)
+    x = L.BatchNormalization()(x)
+    x = L.Activation("relu")(x)
     return x
 
-def enc(inputs, n):
-    x = conv_block(inputs, n); p = MaxPool2D((2,2))(x); return x, p
 
-def dec(inputs, skip, n):
-    x = UpSampling2D()(inputs)
-    x = Conv2D(n, 3, padding="same", activation="relu")(x)
-    x = Concatenate()([x, skip])
-    x = conv_block(x, n)
-    return x
+def encoder_block(inputs: tf.Tensor, nf: int) -> Tuple[tf.Tensor, tf.Tensor]:
+    x = conv_block(inputs, nf)
+    pooled = L.MaxPool2D(pool_size=(2, 2))(x)
+    return x, pooled
 
-def build_unet(input_shape=(256,256,3)):
-    inp = Input(shape=input_shape)
-    s1,p1 = enc(inp,  64)
-    s2,p2 = enc(p1,  128)
-    s3,p3 = enc(p2,  256)
-    s4,p4 = enc(p3,  512)
-    b     = conv_block(p4, 1024)
-    d1    = dec(b,  s4, 512)
-    d2    = dec(d1, s3, 256)
-    d3    = dec(d2, s2, 128)
-    d4    = dec(d3, s1,  64)
-    out   = Conv2D(3, 1, padding="same", activation="sigmoid")(d4)
-    return Model(inp, out, name="U-Net_SR_x1")
 
-# =========================
-# 3) LOSSES / METRICS
-# =========================
-def mse_loss(y_true, y_pred):  return tf.reduce_mean(tf.square(y_true - y_pred))
-def ssim_loss(y_true, y_pred): return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
-def psnr_metric(y_true, y_pred): return tf.image.psnr(y_true, y_pred, max_val=1.0)
-def ssim_metric(y_true, y_pred): return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
-ALPHA, BETA = 1.0, 0.1
-def combined_loss(y_true, y_pred): return ALPHA*mse_loss(y_true,y_pred) + BETA*ssim_loss(y_true,y_pred)
+def decoder_block(inputs: tf.Tensor, skip: tf.Tensor, nf: int) -> tf.Tensor:
+    x = L.UpSampling2D(size=(2, 2), interpolation="bilinear")(inputs)
+    x = L.Conv2D(nf, 3, padding="same", activation="relu")(x)
+    x = L.Concatenate()([x, skip])
+    return conv_block(x, nf)
 
-# =========================
-# 4) DATASETS
-# =========================
-BATCH_SIZE = 4
-EPOCHS = 100
-train_ds = (tf.data.Dataset.from_tensor_slices((train_low_image, train_high_image))
-            .shuffle(len(train_low_image)).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE))
-valid_ds = (tf.data.Dataset.from_tensor_slices((validation_low_image, validation_high_image))
-            .batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE))
 
-# =========================
-# 5) TRAIN
-# =========================
-model = build_unet((SIZE,SIZE,3))
-model.compile(optimizer=tf.keras.optimizers.Adam(1e-4),
-              loss=combined_loss,
-              metrics=[psnr_metric, ssim_metric])
-print("[info] compiled ok.")
+def build_super_resolution_unet(input_shape: Tuple[int, int, int]) -> Model:
+    inputs = Input(shape=input_shape, name="low_res_input")
 
-CKPT_DIR = "/home/knarwani/thesis/super-resolution/models"
-os.makedirs(CKPT_DIR, exist_ok=True)
-CKPT_PATH = os.path.join(CKPT_DIR, "best_by_val_loss.keras")
+    s1, p1 = encoder_block(inputs, 64)
+    s2, p2 = encoder_block(p1, 128)
+    s3, p3 = encoder_block(p2, 256)
+    s4, p4 = encoder_block(p3, 512)
 
-early_stop = EarlyStopping(monitor="val_loss", mode="min", patience=10,
-                           restore_best_weights=True, verbose=1)
-model_ckpt = ModelCheckpoint(filepath=CKPT_PATH, monitor="val_loss",
-                             mode="min", save_best_only=True, verbose=1)
+    bottleneck = conv_block(p4, 1024)
 
-print("[info] starting training…")
-model.summary()
-history = model.fit(train_ds,
-                    epochs=EPOCHS,
-                    validation_data=valid_ds,
-                    callbacks=[early_stop, model_ckpt],
-                    verbose=2)
-print("[info] training done.")
+    d1 = decoder_block(bottleneck, s4, 512)
+    d2 = decoder_block(d1, s3, 256)
+    d3 = decoder_block(d2, s2, 128)
+    d4 = decoder_block(d3, s1, 64)
 
-# =========================
-# 6) QUICK VAL METRICS
-# =========================
-EVAL_BATCH = 8
-eval_ds = (tf.data.Dataset.from_tensor_slices((validation_low_image, validation_high_image))
-           .batch(EVAL_BATCH).prefetch(tf.data.AUTOTUNE))
+    outputs = L.Conv2D(3, 1, padding="same", activation="sigmoid", name="enhanced_rgb")(d4)
+    return Model(inputs, outputs, name="U-Net_SR_256x256")
 
-all_psnr, all_ssim, all_msssim = [], [], []; n_images = 0
-for lr_b, hr_b in eval_ds:
-    pred_b = model(lr_b, training=False)
-    hr_tf   = tf.cast(hr_b, tf.float32)
-    pred_tf = tf.cast(tf.clip_by_value(pred_b, 0.0, 1.0), tf.float32)
-    all_psnr.append(tf.image.psnr(hr_tf, pred_tf, max_val=1.0).numpy())
-    all_ssim.append(tf.image.ssim(hr_tf, pred_tf, max_val=1.0).numpy())
-    all_msssim.append(tf.image.ssim_multiscale(hr_tf, pred_tf, max_val=1.0).numpy())
-    n_images += int(hr_b.shape[0])
 
-def mean_std(x):
-    x = np.concatenate(x, axis=0).astype(np.float64)
-    return float(np.mean(x)), float(np.std(x))
+# -----------------------------------------------------------------------------
+# Losses & metrics
+# -----------------------------------------------------------------------------
 
-m_psnr, s_psnr     = mean_std(all_psnr)
-m_ssim, s_ssim     = mean_std(all_ssim)
-m_msssim, s_msssim = mean_std(all_msssim)
-print(f"Validation images evaluated: {n_images}")
-print(f" PSNR    : {m_psnr:.4f} ± {s_psnr:.4f} dB")
-print(f" SSIM    : {m_ssim:.4f} ± {s_ssim:.4f}")
-print(f" MS-SSIM : {m_msssim:.4f} ± {s_msssim:.4f}")
+def build_losses() -> Tuple[tf.keras.losses.Loss, List[tf.keras.metrics.Metric]]:
+    vgg = tf.keras.applications.VGG19(include_top=False, weights="imagenet", input_shape=(256, 256, 3))
+    vgg.trainable = False
+    feature_extractor = Model(inputs=vgg.input, outputs=vgg.get_layer("block4_conv4").output)
+
+    alpha = tf.constant(1.0, dtype=tf.float32)
+    beta = tf.constant(0.1, dtype=tf.float32)
+    gamma = tf.constant(0.01, dtype=tf.float32)
+
+    def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        return tf.reduce_mean(tf.square(y_true - y_pred))
+
+    def ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
+
+    def perceptual_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        y_true = tf.cast(tf.clip_by_value(y_true, 0.0, 1.0), tf.float32)
+        y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
+        ft = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_true * 255.0))
+        fp = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_pred * 255.0))
+        return tf.reduce_mean(tf.square(ft - fp))
+
+    def combined_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        mse_val = tf.cast(mse_loss(y_true, y_pred), tf.float32)
+        ssim_val = tf.cast(ssim_loss(y_true, y_pred), tf.float32)
+        perc_val = tf.cast(perceptual_loss(y_true, y_pred), tf.float32)
+        return alpha * mse_val + beta * ssim_val + gamma * perc_val
+
+    def psnr_metric(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
+        return tf.reduce_mean(tf.image.psnr(y_true, y_pred, max_val=1.0))
+
+    combined_loss.__name__ = "combined_loss"
+    psnr_metric.__name__ = "psnr"
+    return combined_loss, [psnr_metric]
+
+
+# -----------------------------------------------------------------------------
+# Training / evaluation
+# -----------------------------------------------------------------------------
+
+def evaluate(model: Model, dataset: tf.data.Dataset) -> Dict[str, Tuple[float, float]]:
+    psnr_vals, ssim_vals, msssim_vals = [], [], []
+    for lr_batch, hr_batch in dataset:
+        preds = tf.cast(tf.clip_by_value(model(lr_batch, training=False), 0.0, 1.0), tf.float32)
+        hr_batch = tf.cast(hr_batch, tf.float32)
+        psnr_vals.append(tf.image.psnr(hr_batch, preds, max_val=1.0).numpy())
+        ssim_vals.append(tf.image.ssim(hr_batch, preds, max_val=1.0).numpy())
+        msssim_vals.append(tf.image.ssim_multiscale(hr_batch, preds, max_val=1.0).numpy())
+
+    if not psnr_vals:
+        return {}
+
+    def mean_std(values: List[np.ndarray]) -> Tuple[float, float]:
+        arr = np.concatenate(values, axis=0).astype(np.float64)
+        return float(np.mean(arr)), float(np.std(arr))
+
+    return {
+        "psnr": mean_std(psnr_vals),
+        "ssim": mean_std(ssim_vals),
+        "ms_ssim": mean_std(msssim_vals),
+    }
+
+
+def main(args: argparse.Namespace) -> None:
+    tf.keras.utils.set_random_seed(args.seed)
+
+    hr_images = load_image_stack(Path(args.high_res_dir), args.hr_size, limit=args.limit)
+    lr_images = load_image_stack(Path(args.low_res_dir), args.hr_size, limit=args.limit)
+    if hr_images.shape != lr_images.shape:
+        raise ValueError("High-resolution and low-resolution stacks must align one-to-one.")
+
+    train_idx, val_idx, test_idx = split_indices(
+        n_samples=hr_images.shape[0],
+        train=args.train_split,
+        val=args.val_split,
+        test=args.test_split,
+        seed=args.seed,
+    )
+
+    train_ds = make_tf_dataset(lr_images, hr_images, train_idx, args.batch_size, shuffle=True, seed=args.seed)
+    val_ds = make_tf_dataset(lr_images, hr_images, val_idx, args.batch_size, shuffle=False, seed=args.seed)
+    test_ds = make_tf_dataset(lr_images, hr_images, test_idx, args.batch_size, shuffle=False, seed=args.seed) if len(test_idx) else None
+
+    model = build_super_resolution_unet((args.hr_size, args.hr_size, 3))
+    loss_fn, metrics = build_losses()
+    model.compile(optimizer=Adam(learning_rate=args.learning_rate), loss=loss_fn, metrics=metrics)
+
+    callbacks = [
+        EarlyStopping(monitor="val_loss", mode="min", patience=args.patience, restore_best_weights=True, verbose=1),
+        ModelCheckpoint(filepath=str(Path(args.model_dir) / "unet_vanilla_best.keras"), monitor="val_loss", mode="min", save_best_only=True, verbose=1),
+        BackupAndRestore(str(Path(args.model_dir) / "train_backup")),
+    ]
+
+    model.fit(
+        train_ds,
+        epochs=args.epochs,
+        validation_data=val_ds,
+        callbacks=callbacks,
+        verbose=2,
+    )
+
+    print("Validation metrics:", evaluate(model, val_ds))
+    if test_ds is not None:
+        print("Test metrics:", evaluate(model, test_ds))
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train the vanilla super-resolution U-Net baseline.")
+    parser.add_argument("--high_res_dir", type=str, required=True, help="Directory containing high-resolution images.")
+    parser.add_argument("--low_res_dir", type=str, required=True, help="Directory containing low-resolution images.")
+    parser.add_argument("--hr_size", type=int, default=256, help="Input/output spatial size.")
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--train_split", type=float, default=0.8, help="Relative portion of samples for training.")
+    parser.add_argument("--val_split", type=float, default=0.1, help="Relative portion of samples for validation.")
+    parser.add_argument("--test_split", type=float, default=0.1, help="Relative portion of samples for testing.")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--limit", type=int, default=None, help="Optional limit on number of pairs to load.")
+    parser.add_argument("--model_dir", type=str, default="models", help="Directory to store checkpoints.")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    main(parse_args())
