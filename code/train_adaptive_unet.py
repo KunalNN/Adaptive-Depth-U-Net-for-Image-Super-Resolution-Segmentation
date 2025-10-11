@@ -156,14 +156,17 @@ class ResizeByScale(L.Layer):
         self.antialias = antialias
 
     def call(self, x: tf.Tensor) -> tf.Tensor:
-        x_dtype = x.dtype
-        h = tf.shape(x)[1]
-        w = tf.shape(x)[2]
-        nh = tf.cast(tf.round(tf.cast(h, tf.float32) * self.scale), tf.int32)
-        nw = tf.cast(tf.round(tf.cast(w, tf.float32) * self.scale), tf.int32)
-        res = tf.image.resize(tf.cast(x, tf.float32), [nh, nw], method=self.method, antialias=self.antialias)
-        return tf.cast(res, x_dtype)
+        x_dtype = x.dtype # save the incoming tensor's dtype
+        h = tf.shape(x)[1] # height
+        w = tf.shape(x)[2] # width
+        nh = tf.cast(tf.round(tf.cast(h, tf.float32) * self.scale), tf.int32) # new height
+        nw = tf.cast(tf.round(tf.cast(w, tf.float32) * self.scale), tf.int32) # new width
 
+        # Resize the image
+        res = tf.image.resize(tf.cast(x, tf.float32), [nh, nw], method=self.method, antialias=self.antialias)
+        return tf.cast(res, x_dtype) # cast back to original dtype
+
+    # this method allow Keres to later recreate the layer with the same settings 
     def get_config(self) -> Dict[str, object]:
         return {
             **super().get_config(),
@@ -181,8 +184,8 @@ class ResizeToMatch(L.Layer):
         self.antialias = antialias
 
     def call(self, inputs: Tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
-        x, ref = inputs
-        target_hw = tf.shape(ref)[1:3]
+        x, ref = inputs # x is the tensor to resize, ref is the reference tensor
+        target_hw = tf.shape(ref)[1:3] # target height and width
         res = tf.image.resize(tf.cast(x, tf.float32), target_hw, method=self.method, antialias=self.antialias)
         return tf.cast(res, x.dtype)
 
@@ -195,11 +198,14 @@ class ResizeToMatch(L.Layer):
 
 
 def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
-    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs)
-    x = L.LayerNormalization(axis=-1)(x)
-    x = L.Activation("relu")(x)
-    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(x)
-    x = L.LayerNormalization(axis=-1)(x)
+    # Make nf a trainable parameter for the Unet (maybe in future)
+    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs) # Conv2D with 3x3 kernel with nf number of filters
+    x = L.LayerNormalization(axis=-1)(x) # LayerNorm over channels
+    x = L.Activation("relu")(x) # ReLU activation
+
+    # Running this twice deepens the receptive field and injects nonlinearity while keeping spatial size unchanged
+    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(x) 
+    x = L.LayerNormalization(axis=-1)(x) 
     x = L.Activation("relu")(x)
     return x
 
@@ -207,9 +213,10 @@ def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
 @register_keras_serializable(package="utils")
 class ClipAdd(L.Layer):
     def call(self, inputs: Tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
-        inp, residual = inputs
-        out = tf.cast(inp, tf.float32) + tf.cast(residual, tf.float32)
-        return tf.cast(tf.clip_by_value(out, 0.0, 1.0), inp.dtype)
+        inp, residual = inputs # inp is the low-res input, residual is the predicted residual
+        out = tf.cast(inp, tf.float32) + tf.cast(residual, tf.float32) # add in float32 for numerical stability
+        #  The network takes the low-res image as input, learns to predict the residual correction—the difference between the degraded image and the desired high-res output—and Clipadd adds that correction back to the original input 
+        return tf.cast(tf.clip_by_value(out, 0.0, 1.0), inp.dtype) 
 
 
 # --------------------------------------------------------------------------- #
@@ -223,16 +230,22 @@ def build_super_resolution_unet(
     depth_override: int | None = None,
     input_size: int = 256,
 ) -> Tuple[Model, Dict[str, object]]:
+    
+    # Pick encoder depth explicitly or infer from the downscale factor
     depth = depth_override or infer_depth_from_scale(scale)
 
-    down_layer = ResizeByScale(scale, name="enc_down")
-    up_layer = ResizeToMatch(name="dec_up")
+    down_layer = ResizeByScale(scale, name="enc_down") # shrinks features in the encoder
+    up_layer = ResizeToMatch(name="dec_up") # upsamples to a skip-connection’s size in the decoder 
 
-    inputs = Input(shape=(input_size, input_size, 3), name="low_res_input")
+    # Low-resolution RGB enters here, decoder will reuse stored skips.
+    inputs = Input(shape=(input_size, input_size, 3), name="low_res_input") 
+    # when calling Input(), it creates a placeholder tensor that represents the input data for the model
+
     skips: List[tf.Tensor] = []
     x = inputs
     nf = base_channels
 
+    # Encoder: extract features, remember skips, and shrink spatially.
     for _ in range(depth):
         skip = conv_block(x, nf)
         pooled = down_layer(skip)
@@ -240,16 +253,21 @@ def build_super_resolution_unet(
         x = pooled
         nf *= 2
 
+    # Bottleneck operates at smallest spatial resolution with widest channels.
     x = conv_block(x, nf)
 
+    # Decoder: upsample, fuse skip features, and refine activations.
     for skip in reversed(skips):
         nf //= 2
-        x = up_layer([x, skip])
-        x = L.Conv2D(nf, 3, padding="same", activation="relu")(x)
-        x = L.Concatenate()([x, skip])
+        x = up_layer([x, skip]) # resize to match skip's spatial dimensions
+        x = L.Conv2D(nf, 3, padding="same", activation="relu")(x) # conv to reduce artifacts after upsampling
+        # upsampling by resize tends to introduce checkerboard or ringing artifacts. Running a quick Conv2D + ReLU immediately after the resize cleans up those artifacts and pre‑conditions the feature map before you fuse it with the skip tensor
+        x = L.Concatenate()([x, skip]) # fuse skip connection
         x = conv_block(x, nf)
 
-    x_head = conv_block(x, residual_head_channels)
+    # Residual head predicts RGB correction; zero init keeps identity start.
+    x_head = conv_block(x, residual_head_channels) # to shrink features width
+    # maps those features to three channels (RGB) with a 1×1 convolution. Zero kernel/bias init means the network starts by outputting zeros, so initially the model just copies the input until training teaches it useful corrections.
     residual = L.Conv2D(
         3,
         1,
@@ -258,8 +276,10 @@ def build_super_resolution_unet(
         bias_initializer="zeros",
         name="residual_rgb",
     )(x_head)
+    # ClipAdd merges residual with the input while clamping to image range.
     outputs = ClipAdd(name="enhanced_rgb")([inputs, residual])
 
+    # Return the assembled model plus diagnostics for logging/reporting.
     model = Model(inputs, outputs, name=f"U-Net_SR_scale{scale:.2f}_depth{depth}")
     info = {
         "scale": scale,
