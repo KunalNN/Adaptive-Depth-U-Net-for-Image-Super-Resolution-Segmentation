@@ -101,6 +101,7 @@ runs/
 outputs/
 tmp/
 temp/
+Segmenation/data/
 *.h5
 *.hdf5
 *.ckpt
