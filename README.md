@@ -85,3 +85,5 @@ Logs are written to `logs/slurm-*.out`. Each run also mirrors the console stream
 - Launch Jupyter (`jupyter lab` or `jupyter notebook`) and open any notebook in `notebooks/` for qualitative comparisons and quantitative summaries. Notable entries include `model-eval-adaptive-depth.ipynb` and `u-net-0.6.ipynb`.
 - Saved models under `models/` can be loaded directly via `tf.keras.models.load_model`.
 - The `models/optuna_run` directory captures hyperparameter search artefacts (Optuna trials).
+
+# Segmentation TODO
