@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+import math
 import cv2
 import numpy as np
 import tensorflow as tf
@@ -73,7 +74,7 @@ def load_rgb_image(path: str, size: int) -> np.ndarray:
 
 def degrade_image(hr_image: np.ndarray, scale: float, size: int) -> np.ndarray:
     """Downscale by `scale` then bicubic upsample back to `size`."""
-    low_size = max(1, int(round(size * scale)))
+    low_size = max(1, int(math.ceil(size * scale)))
     low = cv2.resize(hr_image, (low_size, low_size), interpolation=cv2.INTER_AREA)
     restored = cv2.resize(low, (size, size), interpolation=cv2.INTER_CUBIC)
     return restored
@@ -165,8 +166,10 @@ class ResizeByScale(L.Layer):
         x_dtype = x.dtype # save the incoming tensor's dtype
         h = tf.shape(x)[1] # height
         w = tf.shape(x)[2] # width
-        nh = tf.cast(tf.round(tf.cast(h, tf.float32) * self.scale), tf.int32) # new height
-        nw = tf.cast(tf.round(tf.cast(w, tf.float32) * self.scale), tf.int32) # new width
+        nh = tf.cast(tf.math.ceil(tf.cast(h, tf.float32) * self.scale), tf.int32) # new height
+        nw = tf.cast(tf.math.ceil(tf.cast(w, tf.float32) * self.scale), tf.int32) # new width
+        nh = tf.maximum(nh, 1)
+        nw = tf.maximum(nw, 1)
 
         # Resize the image
         res = tf.image.resize(tf.cast(x, tf.float32), [nh, nw], method=self.method, antialias=self.antialias)
@@ -482,10 +485,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--val_split", type=float, default=0.1)
     parser.add_argument("--test_split", type=float, default=0.1)
+    parser.add_argument("--limit", type=int, default=None, help="Optionally limit the number of training samples.")
+    parser.add_argument("--seed", type=int, default=1234, help="Seed for dataset shuffling and splitting.")
     parser.add_argument("--base_channels", type=int, default=64)
     parser.add_argument("--residual_head_channels", type=int, default=64)
     parser.add_argument("--depth_override", type=int, default=None, help="Force a specific encoder depth.")
-    # parser.add_argument("--mixed_precision", action="store_true", help="Enable mixed_float16 policy.")
+    parser.add_argument("--mixed_precision", action="store_true", help="Enable mixed_float16 policy.")
     parser.add_argument("--model_dir", type=str, default=str(DEFAULT_MODEL_DIR), help="Directory to store checkpoints.")
     return parser.parse_args()
 
