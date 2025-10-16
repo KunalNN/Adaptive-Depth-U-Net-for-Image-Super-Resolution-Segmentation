@@ -6,204 +6,29 @@ entry point that can be launched on a cluster. It parameterises the scale
 factor, produces low-resolution inputs on-the-fly, and keeps the encoder depth
 in line with the design table from the project summary.
 """
-from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2])) # because Shared is two levels up
 
 import argparse
 import glob
-import os
-from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
-import math
-import cv2
 import numpy as np
 import tensorflow as tf
-from keras.saving import register_keras_serializable
 from tensorflow.keras import Input, Model, mixed_precision
 from tensorflow.keras import layers as L
 from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint
+
+from shared.pipeline import degrade_image, load_rgb_image, make_tf_dataset, sorted_alphanumeric, split_indices
+from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch, estimate_bottleneck_size, infer_depth_from_scale
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HIGH_RES_DIR = PROJECT_ROOT / "dataset" / "Raw Data" / "high_res"
 DEFAULT_LOW_RES_DIR = PROJECT_ROOT / "dataset" / "Raw Data" / "low_res"
 DEFAULT_MODEL_DIR = PROJECT_ROOT / "models"
-
-
-# --------------------------------------------------------------------------- #
-# Utility helpers
-# --------------------------------------------------------------------------- #
-
-def sorted_alphanumeric(paths: Iterable[str]) -> List[str]:
-    """Sort file paths in human order so that 10 follows 9 and not 1."""
-
-    def convert(token: str):
-        return int(token) if token.isdigit() else token.lower()
-
-    def key_func(path: str):
-        parts: List[str] = []
-        token = ""
-        for char in path:
-            if char.isdigit():
-                if token and not token[-1].isdigit():
-                    parts.append(token)
-                    token = ""
-                token += char
-            else:
-                if token and token[-1].isdigit():
-                    parts.append(token)
-                    token = ""
-                token += char
-        if token:
-            parts.append(token)
-        return [convert(p) for p in parts]
-
-    return sorted(paths, key=key_func)
-
-
-def load_rgb_image(path: str, size: int) -> np.ndarray:
-    """Load an RGB image, resize to `size`, and normalise to [0, 1]."""
-    img = cv2.imread(path, cv2.IMREAD_COLOR)
-    if img is None:
-        raise FileNotFoundError(f"Unable to read image: {path}")
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
-    img = img.astype(np.float32) / 255.0
-    return img
-
-
-def degrade_image(hr_image: np.ndarray, scale: float, size: int) -> np.ndarray:
-    """Downscale by `scale` then bicubic upsample back to `size`."""
-    low_size = max(1, int(math.ceil(size * scale)))
-    low = cv2.resize(hr_image, (low_size, low_size), interpolation=cv2.INTER_AREA)
-    restored = cv2.resize(low, (size, size), interpolation=cv2.INTER_CUBIC)
-    return restored
-
-
-def split_indices(n: int, val_frac: float, test_frac: float, seed: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Split indices into train/val/test using the provided fractions."""
-    if n == 0:
-        raise ValueError("No samples available after loading dataset.")
-    rng = np.random.default_rng(seed)
-    indices = np.arange(n)
-    rng.shuffle(indices)
-
-    n_val = int(round(n * val_frac))
-    n_test = int(round(n * test_frac))
-    n_val = min(n_val, n - 1) if n > 1 else 0
-    n_test = min(n_test, n - n_val - 1) if n > (n_val + 1) else 0
-    n_train = n - n_val - n_test
-    if n_train <= 0:
-        raise ValueError("Split fractions leave no samples for training.")
-
-    train_idx = indices[:n_train]
-    val_idx = indices[n_train:n_train + n_val]
-    test_idx = indices[n_train + n_val:]
-    return train_idx, val_idx, test_idx
-
-
-def make_tf_dataset(
-    lr_images: np.ndarray,
-    hr_images: np.ndarray,
-    indices: np.ndarray,
-    batch_size: int,
-    shuffle: bool,
-    seed: int,
-) -> tf.data.Dataset:
-    """Create a tf.data pipeline for a given index set."""
-    data = tf.data.Dataset.from_tensor_slices((lr_images[indices], hr_images[indices]))
-    if shuffle:
-        data = data.shuffle(len(indices), seed=seed, reshuffle_each_iteration=True)
-    return data.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-
-
-# --------------------------------------------------------------------------- #
-# Depth heuristic
-# --------------------------------------------------------------------------- #
-
-def infer_depth_from_scale(scale: float, min_depth: int = 1, max_depth: int = 4) -> int:
-    """
-    Decide encoder depth using the project design table:
-      scale <= 0.25 -> depth 1
-      scale <= 0.45 -> depth 2
-      otherwise     -> depth 3
-    """
-    if not (0.05 < scale < 1.0):
-        raise ValueError("Scale should be between 0 and 1 (exclusive).")
-
-    if scale <= 0.25:
-        depth = 1
-    elif scale <= 0.45:
-        depth = 2
-    else:
-        depth = 3
-
-    depth = max(min_depth, min(depth, max_depth))
-    return depth
-
-
-def estimate_bottleneck_size(hr: int, scale: float, depth: int) -> int:
-    """Compute the spatial extent at the bottleneck for diagnostics."""
-    size = hr
-    for _ in range(depth):
-        size = max(1, int(round(size * scale)))
-    return size
-
-
-# --------------------------------------------------------------------------- #
-# Custom layers
-# --------------------------------------------------------------------------- #
-
-@register_keras_serializable(package="resize")
-class ResizeByScale(L.Layer):
-    def __init__(self, scale: float, method: str = "bilinear", antialias: bool = True, name: str | None = None, **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.scale = float(scale)
-        self.method = method
-        self.antialias = antialias
-
-    def call(self, x: tf.Tensor) -> tf.Tensor:
-        x_dtype = x.dtype # save the incoming tensor's dtype
-        h = tf.shape(x)[1] # height
-        w = tf.shape(x)[2] # width
-        nh = tf.cast(tf.math.ceil(tf.cast(h, tf.float32) * self.scale), tf.int32) # new height
-        nw = tf.cast(tf.math.ceil(tf.cast(w, tf.float32) * self.scale), tf.int32) # new width
-        nh = tf.maximum(nh, 1)
-        nw = tf.maximum(nw, 1)
-
-        # Resize the image
-        res = tf.image.resize(tf.cast(x, tf.float32), [nh, nw], method=self.method, antialias=self.antialias)
-        return tf.cast(res, x_dtype) # cast back to original dtype
-
-    # this method allow Keres to later recreate the layer with the same settings 
-    def get_config(self) -> Dict[str, object]:
-        return {
-            **super().get_config(),
-            "scale": self.scale,
-            "method": self.method,
-            "antialias": self.antialias,
-        }
-
-
-@register_keras_serializable(package="resize")
-class ResizeToMatch(L.Layer):
-    def __init__(self, method: str = "bilinear", antialias: bool = True, name: str | None = None, **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.method = method
-        self.antialias = antialias
-
-    def call(self, inputs: Tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
-        x, ref = inputs # x is the tensor to resize, ref is the reference tensor
-        target_hw = tf.shape(ref)[1:3] # target height and width
-        res = tf.image.resize(tf.cast(x, tf.float32), target_hw, method=self.method, antialias=self.antialias)
-        return tf.cast(res, x.dtype)
-
-    def get_config(self) -> Dict[str, object]:
-        return {
-            **super().get_config(),
-            "method": self.method,
-            "antialias": self.antialias,
-        }
 
 
 def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
@@ -217,15 +42,6 @@ def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
     x = L.LayerNormalization(axis=-1)(x) 
     x = L.Activation("relu")(x)
     return x
-
-
-@register_keras_serializable(package="utils")
-class ClipAdd(L.Layer):
-    def call(self, inputs: Tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
-        inp, residual = inputs # inp is the low-res input, residual is the predicted residual
-        out = tf.cast(inp, tf.float32) + tf.cast(residual, tf.float32) # add in float32 for numerical stability
-        #  The network takes the low-res image as input, learns to predict the residual correction—the difference between the degraded image and the desired high-res output—and Clipadd adds that correction back to the original input 
-        return tf.cast(tf.clip_by_value(out, 0.0, 1.0), inp.dtype) 
 
 
 # --------------------------------------------------------------------------- #
@@ -384,8 +200,12 @@ def train(args: argparse.Namespace) -> None:
     else:
         lr_images = np.stack([degrade_image(img, args.scale, args.hr_size) for img in hr_images])
 
+    train_split = 1.0 - (args.val_split + args.test_split)
+    if train_split <= 0:
+        raise ValueError("Validation and test splits leave no room for training data.")
+
     train_idx, val_idx, test_idx = split_indices(
-        len(hr_images), args.val_split, args.test_split, args.seed
+        len(hr_images), train_split, args.val_split, args.test_split, args.seed
     )
 
     train_ds = make_tf_dataset(lr_images, hr_images, train_idx, args.batch_size, shuffle=True, seed=args.seed)
