@@ -13,14 +13,18 @@ sys.path.append(str(Path(__file__).resolve().parents[2])) # because Shared is tw
 
 import argparse
 import glob
+import json
 import re
+from datetime import datetime
 from typing import Dict, Iterable, List, Sequence, Tuple
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Input, Model, mixed_precision
 from tensorflow.keras import layers as L
 from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint
 
+from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, LOG_ROOT, MODEL_ROOT
 from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch, estimate_bottleneck_size, infer_depth_from_scale
 from shared.pipeline import degrade_image, load_rgb_image, make_tf_dataset
 
@@ -31,10 +35,10 @@ tf.config.optimizer.set_jit(False)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Updated defaults to match the scratch copy of DIV2K prepared for this project.
-DATA_ROOT = Path("/scratch/knarwani/Final_data/Super_resolution")
-DEFAULT_HIGH_RES_DIR = DATA_ROOT / "DIV2K_train_HR"
-DEFAULT_LOW_RES_DIR = DATA_ROOT / "DIV2K_train_LR_bicubic-2" / "X4"
-DEFAULT_MODEL_DIR = PROJECT_ROOT / "Super_resolution" / "models"
+DEFAULT_HIGH_RES_DIR = HR_TRAIN_DIR
+DEFAULT_LOW_RES_DIR = LR_TRAIN_DIR
+DEFAULT_MODEL_DIR = MODEL_ROOT
+DEFAULT_LOG_DIR = LOG_ROOT
 
 
 # --------------------------------------------------------------------------- #
@@ -325,6 +329,7 @@ def train(args: argparse.Namespace) -> None:
 
     hr_images = np.stack([load_rgb_image(path, args.hr_size) for path in hr_paths])
 
+    low_res_dir_path: Path | None = None
     if args.low_res_dir:
         low_res_dir = Path(args.low_res_dir).expanduser()
         if not low_res_dir.exists():
@@ -337,6 +342,7 @@ def train(args: argparse.Namespace) -> None:
 
         low_paths = sorted_alphanumeric(glob.glob(str(low_res_dir / f"*{args.image_suffix}")))
         low_index = {canonical_lr_key(path): path for path in low_paths}
+        low_res_dir_path = low_res_dir
 
         lr_images = []
         for hr_path in hr_paths:
@@ -385,14 +391,79 @@ def train(args: argparse.Namespace) -> None:
         jit_compile=False,  # avoid XLA forcing unsupported resize ops on the cluster
     )
 
+    summary_lines: List[str] = []
+    model.summary(print_fn=summary_lines.append)
+    for line in summary_lines:
+        print(line)
+
     model_dir = Path(args.model_dir).expanduser()
     model_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = model_dir / f"unet_adaptive_scale{args.scale:.2f}_depth{info['depth']}.keras"
 
+    log_root = Path(args.log_dir).expanduser()
+    log_root.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    inferred_name = f"scale{args.scale:.2f}_bs{args.batch_size}_lr{args.learning_rate:.0e}_{timestamp}"
+    run_name = args.run_name or inferred_name
+    run_dir = log_root / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    config_payload = {
+        "scale": args.scale,
+        "depth": info["depth"],
+        "hr_size": args.hr_size,
+        "base_channels": args.base_channels,
+        "residual_head_channels": args.residual_head_channels,
+        "learning_rate": args.learning_rate,
+        "batch_size": args.batch_size,
+        "epochs": args.epochs,
+        "patience": args.patience,
+        "train_samples": int(len(train_idx)),
+        "val_samples": int(len(val_idx)),
+        "test_samples": int(len(test_idx)),
+        "mixed_precision": bool(args.mixed_precision),
+        "high_res_dir": str(high_res_dir),
+        "low_res_dir": str(low_res_dir_path) if low_res_dir_path else "synthetic",
+        "model_dir": str(model_dir),
+        "log_dir": str(run_dir),
+        "created_at": timestamp,
+    }
+    (run_dir / "config.json").write_text(json.dumps(config_payload, indent=2))
+    (run_dir / "model_summary.txt").write_text("\n".join(summary_lines))
+
+    preview_count = min(3, len(train_idx))
+    writer = tf.summary.create_file_writer(str(run_dir))
+    with writer.as_default():
+        tf.summary.text("config/hyperparameters", tf.constant(json.dumps(config_payload, indent=2)), step=0)
+        tf.summary.scalar("dataset/counts/train", len(train_idx), step=0)
+        tf.summary.scalar("dataset/counts/val", len(val_idx), step=0)
+        tf.summary.scalar("dataset/counts/test", len(test_idx), step=0)
+        if preview_count > 0:
+            sel = train_idx[:preview_count]
+            hr_preview = tf.convert_to_tensor(hr_images[sel])
+            lr_preview = tf.convert_to_tensor(lr_images[sel])
+            tf.summary.image("samples/hr_train", hr_preview, step=0, max_outputs=preview_count)
+            tf.summary.image("samples/lr_train", lr_preview, step=0, max_outputs=preview_count)
+            tf.summary.histogram("hist/hr_train", tf.reshape(hr_preview, [-1]), step=0)
+            tf.summary.histogram("hist/lr_train", tf.reshape(lr_preview, [-1]), step=0)
+        tf.summary.text("model/summary", tf.constant("\n".join(summary_lines)), step=0)
+    writer.flush()
+
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(
+        log_dir=str(run_dir),
+        histogram_freq=1,
+        write_graph=True,
+        write_images=False,
+        profile_batch=0,
+    )
+
+    backup_dir = run_dir / "train_backup"
+
     callbacks = [
         EarlyStopping(monitor="val_loss", patience=args.patience, restore_best_weights=True, verbose=1),
         ModelCheckpoint(filepath=str(ckpt_path), monitor="val_loss", save_best_only=True, verbose=1),
-        BackupAndRestore(str(model_dir / "train_backup")),
+        BackupAndRestore(str(backup_dir)),
+        tensorboard_callback,
     ]
 
     history = model.fit(
@@ -440,6 +511,14 @@ def train(args: argparse.Namespace) -> None:
         print(f"  PSNR    : {m_psnr:.4f} ± {s_psnr:.4f} dB")
         print(f"  SSIM    : {m_ssim:.4f} ± {s_ssim:.4f}")
         print(f"  MS-SSIM : {m_msssim:.4f} ± {s_msssim:.4f}")
+        eval_step = history.epoch[-1] if hasattr(history, "epoch") and history.epoch else args.epochs
+        with writer.as_default():
+            tag_prefix = name.lower()
+            tf.summary.scalar(f"eval/{tag_prefix}_psnr", m_psnr, step=eval_step)
+            tf.summary.scalar(f"eval/{tag_prefix}_ssim", m_ssim, step=eval_step)
+            tf.summary.scalar(f"eval/{tag_prefix}_msssim", m_msssim, step=eval_step)
+    writer.flush()
+    writer.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -462,6 +541,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--depth_override", type=int, default=None, help="Force a specific encoder depth.")
     parser.add_argument("--mixed_precision", action="store_true", help="Enable mixed_float16 policy.")
     parser.add_argument("--model_dir", type=str, default=str(DEFAULT_MODEL_DIR), help="Directory to store checkpoints.")
+    parser.add_argument("--log_dir", type=str, default=str(DEFAULT_LOG_DIR), help="Directory to store TensorBoard logs.")
+    parser.add_argument("--run_name", type=str, default=None, help="Optional explicit run name for TensorBoard.")
     return parser.parse_args()
 
 
