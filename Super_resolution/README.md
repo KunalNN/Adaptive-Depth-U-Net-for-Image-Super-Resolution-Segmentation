@@ -182,5 +182,3 @@ Images are written to `scale_visualizations/scale_0.6x/`. By default the script 
 For additional questions or edge cases (e.g., running at new scales, integrating new loss terms), leave the existing API calls alone and concentrate changes inside `train_adaptive_unet.py` so the rest of the tooling stays compatible.
 
 ---
-
-Happy super-resolving!
