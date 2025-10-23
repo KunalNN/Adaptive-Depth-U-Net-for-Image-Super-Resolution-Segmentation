@@ -52,16 +52,18 @@ SYNC_FROM_SHARED="${SYNC_FROM_SHARED:-1}"
 # Resolve canonical training/validation paths via dataset_paths so shell defaults
 # always mirror the Python training code.
 readarray -t DATASET_PATHS < <(PYTHONPATH="$SR_DIR/code:${PYTHONPATH:-}" "$PYTHON_BIN" - <<'PY'
-from dataset_paths import DATA_ROOT, HR_TRAIN_DIR, LR_TRAIN_DIR
+from dataset_paths import DATA_ROOT, HR_TRAIN_DIR, LR_TRAIN_DIR, MODEL_ROOT, LOG_ROOT
 from pathlib import Path
 data_root = Path(DATA_ROOT)
 print(data_root)
 print(Path(HR_TRAIN_DIR).relative_to(data_root))
 print(Path(LR_TRAIN_DIR).relative_to(data_root))
+print(Path(MODEL_ROOT).resolve())
+print(Path(LOG_ROOT).resolve())
 PY
 )
 
-if [[ ${#DATASET_PATHS[@]} -lt 3 ]]; then
+if [[ ${#DATASET_PATHS[@]} -lt 5 ]]; then
   echo "[error] Failed to resolve dataset paths via dataset_paths.py" >&2
   exit 1
 fi
@@ -69,6 +71,8 @@ fi
 DEFAULT_DATA_ROOT="${DATASET_PATHS[0]}"
 HR_SUFFIX="${DATASET_PATHS[1]}"
 LR_SUFFIX="${DATASET_PATHS[2]}"
+DEFAULT_MODEL_ROOT="${DATASET_PATHS[3]}"
+DEFAULT_TB_ROOT="${DATASET_PATHS[4]}"
 
 # Respect user override if provided; otherwise trust dataset_paths default.
 if [[ -n "${USER_DATA_ROOT:-}" ]]; then
@@ -79,8 +83,6 @@ fi
 
 DEFAULT_HR_DIR="$DATA_ROOT/$HR_SUFFIX"
 DEFAULT_LR_DIR="$DATA_ROOT/$LR_SUFFIX"
-DEFAULT_MODEL_ROOT="$DATA_ROOT/models"
-DEFAULT_TB_ROOT="$DATA_ROOT/tensorboard"
 
 mkdir -p "$LOGDIR" "$SCRATCH_BASE" "$DATA_ROOT" "$DEFAULT_MODEL_ROOT" "$DEFAULT_TB_ROOT"
 
@@ -177,14 +179,14 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTEROP_THREADS=2
 
 # ─── Run configuration (override via env vars) ────────────────────────────────
-SCALE="${SCALE:-0.6}"
+SCALE="${SCALE:-0.1}"
 HR_DIR="${HR_DIR:-$DEFAULT_HR_DIR}"
 LR_DIR="${LR_DIR:-$DEFAULT_LR_DIR}"
 MODEL_DIR="${MODEL_DIR:-$DEFAULT_MODEL_ROOT}"
 LOG_DIR="${LOG_DIR:-$DEFAULT_TB_ROOT}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 EPOCHS="${EPOCHS:-200}"
-PATIENCE="${PATIENCE:-20}"
+PATIENCE="${PATIENCE:-15}"
 USE_MIXED_PRECISION="${MIXED_PRECISION:-0}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 

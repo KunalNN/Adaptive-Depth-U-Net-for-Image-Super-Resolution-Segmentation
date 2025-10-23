@@ -39,6 +39,10 @@ DEFAULT_HIGH_RES_DIR = HR_TRAIN_DIR
 DEFAULT_LOW_RES_DIR = LR_TRAIN_DIR
 DEFAULT_MODEL_DIR = MODEL_ROOT
 DEFAULT_LOG_DIR = LOG_ROOT
+DEFAULT_IMAGE_SUFFIX = ".png"
+DEFAULT_HR_SIZE = 256
+DEFAULT_BASE_CHANNELS = 64
+DEFAULT_RESIDUAL_HEAD_CHANNELS = 64
 
 
 # --------------------------------------------------------------------------- #
@@ -120,6 +124,22 @@ def degrade_to_lr_tf(hr_image: tf.Tensor, scale: float, output_size: int) -> tf.
     resized = tf.image.resize(hr_image, [down_size, down_size], method=tf.image.ResizeMethod.AREA)
     restored = tf.image.resize(resized, [output_size, output_size], method=tf.image.ResizeMethod.BICUBIC)
     return tf.clip_by_value(restored, 0.0, 1.0)
+
+
+def rgb_to_luma_bt601(image: tf.Tensor) -> tf.Tensor:
+    """
+    Convert an RGB tensor in [0, 1] to its BT.601 luminance channel in [0, 1].
+
+    Parameters
+    ----------
+    image
+        Tensor shaped (N, H, W, 3) or (H, W, 3) containing RGB values normalised to [0, 1].
+    """
+    image = tf.cast(image, tf.float32)
+    coeffs = tf.constant([65.481, 128.553, 24.966], dtype=tf.float32)
+    coeffs = tf.reshape(coeffs, [1, 1, 1, 3])
+    y_channel = tf.reduce_sum(image * coeffs, axis=-1, keepdims=True) + 16.0
+    return tf.clip_by_value(y_channel / 255.0, 0.0, 1.0)
 
 
 def build_dataset(
@@ -267,47 +287,86 @@ def build_super_resolution_unet(
 # Losses & metrics
 # --------------------------------------------------------------------------- #
 
-def build_losses_and_metrics() -> Tuple[tf.keras.losses.Loss, List[tf.keras.metrics.Metric]]:
-    vgg = tf.keras.applications.VGG19(include_top=False, weights="imagenet", input_shape=(256, 256, 3))
-    vgg.trainable = False
-    feature_extractor = Model(inputs=vgg.input, outputs=vgg.get_layer("block4_conv4").output)
+def build_losses_and_metrics(loss_name: str) -> Tuple[tf.keras.losses.Loss, List[tf.keras.metrics.Metric]]:
+    """
+    Create the supervised loss and metrics used during training.
 
-    alpha = tf.constant(1.0, dtype=tf.float32)
-    beta = tf.constant(0.1, dtype=tf.float32)
-    gamma = tf.constant(0.01, dtype=tf.float32)
-
-    def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-        return tf.reduce_mean(tf.square(y_true - y_pred))
-
-    def ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-        return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
-
-    def perceptual_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-        y_true = tf.cast(tf.clip_by_value(y_true, 0.0, 1.0), tf.float32)
-        y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
-        feat_true = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_true * 255.0))
-        feat_pred = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_pred * 255.0))
-        return tf.reduce_mean(tf.square(feat_true - feat_pred))
-
-    def combined_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-        mse_val = tf.cast(mse_loss(y_true, y_pred), tf.float32)
-        ssim_val = tf.cast(ssim_loss(y_true, y_pred), tf.float32)
-        perc_val = tf.cast(perceptual_loss(y_true, y_pred), tf.float32)
-        total = alpha * mse_val + beta * ssim_val + gamma * perc_val
-        return total
+    Parameters
+    ----------
+    loss_name
+        Identifier for the training loss. Supported values:
+        - "charbonnier": robust L1 variant commonly used for PSNR benchmarks.
+        - "l1": mean absolute error on [0, 1] RGB.
+        - "combined": original perceptual + SSIM + MSE cocktail.
+    """
+    loss_key = loss_name.lower()
 
     def psnr_metric(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         y_true = tf.cast(y_true, tf.float32)
         y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
         return tf.reduce_mean(tf.image.psnr(y_true, y_pred, max_val=1.0))
 
-    combined_loss.__name__ = "combined_loss"
-    psnr_metric.__name__ = "psnr"
-    return combined_loss, [psnr_metric]
+    if loss_key == "charbonnier":
+        epsilon = tf.constant(1e-3, dtype=tf.float32)
+
+        def charbonnier_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            diff = y_true - y_pred
+            return tf.reduce_mean(tf.sqrt(tf.square(diff) + tf.square(epsilon)))
+
+        charbonnier_loss.__name__ = "charbonnier_loss"
+        psnr_metric.__name__ = "psnr"
+        return charbonnier_loss, [psnr_metric]
+
+    if loss_key == "l1":
+        def l1_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            return tf.reduce_mean(tf.abs(y_true - y_pred))
+
+        l1_loss.__name__ = "l1_loss"
+        psnr_metric.__name__ = "psnr"
+        return l1_loss, [psnr_metric]
+
+    if loss_key == "combined":
+        vgg = tf.keras.applications.VGG19(include_top=False, weights="imagenet", input_shape=(256, 256, 3))
+        vgg.trainable = False
+        feature_extractor = Model(inputs=vgg.input, outputs=vgg.get_layer("block4_conv4").output)
+
+        alpha = tf.constant(1.0, dtype=tf.float32)
+        beta = tf.constant(0.1, dtype=tf.float32)
+        gamma = tf.constant(0.01, dtype=tf.float32)
+
+        def mse_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            return tf.reduce_mean(tf.square(y_true - y_pred))
+
+        def ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+            y_true = tf.cast(y_true, tf.float32)
+            y_pred = tf.cast(y_pred, tf.float32)
+            return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
+
+        def perceptual_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+            y_true = tf.cast(tf.clip_by_value(y_true, 0.0, 1.0), tf.float32)
+            y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
+            feat_true = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_true * 255.0))
+            feat_pred = feature_extractor(tf.keras.applications.vgg19.preprocess_input(y_pred * 255.0))
+            return tf.reduce_mean(tf.square(feat_true - feat_pred))
+
+        def combined_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+            mse_val = tf.cast(mse_loss(y_true, y_pred), tf.float32)
+            ssim_val = tf.cast(ssim_loss(y_true, y_pred), tf.float32)
+            perc_val = tf.cast(perceptual_loss(y_true, y_pred), tf.float32)
+            total = alpha * mse_val + beta * ssim_val + gamma * perc_val
+            return total
+
+        combined_loss.__name__ = "combined_loss"
+        psnr_metric.__name__ = "psnr"
+        return combined_loss, [psnr_metric]
+
+    raise ValueError(f"Unknown loss '{loss_name}'. Expected one of: 'charbonnier', 'l1', 'combined'.")
 
 
 # --------------------------------------------------------------------------- #
@@ -315,23 +374,30 @@ def build_losses_and_metrics() -> Tuple[tf.keras.losses.Loss, List[tf.keras.metr
 # --------------------------------------------------------------------------- #
 
 def train(args: argparse.Namespace) -> None:
-    high_res_dir = Path(args.high_res_dir).expanduser()
+    image_suffix = DEFAULT_IMAGE_SUFFIX
+    hr_size = DEFAULT_HR_SIZE
+    base_channels = DEFAULT_BASE_CHANNELS
+    residual_head_channels = DEFAULT_RESIDUAL_HEAD_CHANNELS
+
+    high_res_dir_input = args.high_res_dir or DEFAULT_HIGH_RES_DIR
+    high_res_dir = Path(high_res_dir_input).expanduser()
     if not high_res_dir.exists():
         raise FileNotFoundError(f"High-resolution directory not found: {high_res_dir}")
 
     hr_paths = sorted_alphanumeric(
-        glob.glob(str(high_res_dir / f"*{args.image_suffix}"))
+        glob.glob(str(high_res_dir / f"*{image_suffix}"))
     )
     if args.limit and args.limit > 0:
         hr_paths = hr_paths[:args.limit]
     if not hr_paths:
         raise ValueError("No high-resolution images found with the given suffix.")
 
-    hr_images = np.stack([load_rgb_image(path, args.hr_size) for path in hr_paths])
+    hr_images = np.stack([load_rgb_image(path, hr_size) for path in hr_paths])
 
+    low_res_dir_choice = args.low_res_dir or DEFAULT_LOW_RES_DIR
     low_res_dir_path: Path | None = None
-    if args.low_res_dir:
-        low_res_dir = Path(args.low_res_dir).expanduser()
+    if low_res_dir_choice:
+        low_res_dir = Path(low_res_dir_choice).expanduser()
         if not low_res_dir.exists():
             # Allow pointing at the parent directory that contains scale-specific folders.
             candidates = [p for p in low_res_dir.glob("X*") if p.is_dir()]
@@ -340,7 +406,7 @@ def train(args: argparse.Namespace) -> None:
             else:
                 raise FileNotFoundError(f"Low-resolution directory not found: {low_res_dir}")
 
-        low_paths = sorted_alphanumeric(glob.glob(str(low_res_dir / f"*{args.image_suffix}")))
+        low_paths = sorted_alphanumeric(glob.glob(str(low_res_dir / f"*{image_suffix}")))
         low_index = {canonical_lr_key(path): path for path in low_paths}
         low_res_dir_path = low_res_dir
 
@@ -350,10 +416,10 @@ def train(args: argparse.Namespace) -> None:
             low_path = low_index.get(key)
             if low_path is None:
                 raise ValueError(f"Missing low-resolution counterpart for {hr_path}")
-            lr_images.append(load_rgb_image(low_path, args.hr_size))
+            lr_images.append(load_rgb_image(low_path, hr_size))
         lr_images = np.stack(lr_images)
     else:
-        lr_images = np.stack([degrade_image(img, args.scale, args.hr_size) for img in hr_images])
+        lr_images = np.stack([degrade_image(img, args.scale, hr_size) for img in hr_images])
 
     train_split = 1.0 - (args.val_split + args.test_split)
     if train_split <= 0:
@@ -377,13 +443,13 @@ def train(args: argparse.Namespace) -> None:
 
     model, info = build_super_resolution_unet(
         scale=args.scale,
-        base_channels=args.base_channels,
-        residual_head_channels=args.residual_head_channels,
+        base_channels=base_channels,
+        residual_head_channels=residual_head_channels,
         depth_override=args.depth_override,
-        input_size=args.hr_size,
+        input_size=hr_size,
     )
 
-    loss_fn, metrics = build_losses_and_metrics()
+    loss_fn, metrics = build_losses_and_metrics(args.loss)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate),
         loss=loss_fn,
@@ -398,7 +464,7 @@ def train(args: argparse.Namespace) -> None:
 
     model_dir = Path(args.model_dir).expanduser()
     model_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = model_dir / f"unet_adaptive_scale{args.scale:.2f}_depth{info['depth']}.keras"
+    ckpt_path = model_dir / f"unet_adaptive_scale_new_loss{args.scale:.2f}_depth{info['depth']}.keras"
 
     log_root = Path(args.log_dir).expanduser()
     log_root.mkdir(parents=True, exist_ok=True)
@@ -411,9 +477,9 @@ def train(args: argparse.Namespace) -> None:
     config_payload = {
         "scale": args.scale,
         "depth": info["depth"],
-        "hr_size": args.hr_size,
-        "base_channels": args.base_channels,
-        "residual_head_channels": args.residual_head_channels,
+        "hr_size": hr_size,
+        "base_channels": base_channels,
+        "residual_head_channels": residual_head_channels,
         "learning_rate": args.learning_rate,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
@@ -482,17 +548,42 @@ def train(args: argparse.Namespace) -> None:
     if test_ds is not None:
         eval_targets.append(("Test", test_ds))
 
+    if args.eval_shave is not None:
+        eval_shave = max(0, int(args.eval_shave))
+    else:
+        inv_scale = 1.0 / args.scale if args.scale > 0 else 0.0
+        scale_factor = int(round(inv_scale)) if inv_scale > 0 else 0
+        eval_shave = 2 * scale_factor if scale_factor > 0 else 0
+
+    if eval_shave * 2 >= hr_size and hr_size > 0:
+        adjusted = max(0, (hr_size // 2) - 1)
+        print(
+            f"[warn] eval_shave={eval_shave} removes the full frame for hr_size={hr_size}; "
+            f"reducing to {adjusted} pixels."
+        )
+        eval_shave = adjusted
+
     for name, dataset in eval_targets:
-        psnr_vals, ssim_vals, msssim_vals = [], [], []
+        psnr_vals, ssim_vals, msssim_vals, mse_vals = [], [], [], []
         n_images = 0
         for lr_batch, hr_batch in dataset:
-            pred = model(lr_batch, training=False)
-            pred = tf.cast(tf.clip_by_value(pred, 0.0, 1.0), tf.float32)
-            hr = tf.cast(hr_batch, tf.float32)
+            pred_rgb = model(lr_batch, training=False)
+            pred_rgb = tf.cast(tf.clip_by_value(pred_rgb, 0.0, 1.0), tf.float32)
+            hr_rgb = tf.cast(hr_batch, tf.float32)
 
-            psnr_vals.append(tf.image.psnr(hr, pred, max_val=1.0).numpy())
-            ssim_vals.append(tf.image.ssim(hr, pred, max_val=1.0).numpy())
-            msssim_vals.append(tf.image.ssim_multiscale(hr, pred, max_val=1.0).numpy())
+            pred_y = rgb_to_luma_bt601(pred_rgb)
+            hr_y = rgb_to_luma_bt601(hr_rgb)
+
+            if eval_shave > 0:
+                pred_y = pred_y[:, eval_shave:-eval_shave, eval_shave:-eval_shave, :]
+                hr_y = hr_y[:, eval_shave:-eval_shave, eval_shave:-eval_shave, :]
+
+            psnr_vals.append(tf.image.psnr(hr_y, pred_y, max_val=1.0).numpy())
+            ssim_vals.append(tf.image.ssim(hr_y, pred_y, max_val=1.0).numpy())
+            msssim_vals.append(tf.image.ssim_multiscale(hr_y, pred_y, max_val=1.0).numpy())
+            mse_vals.append(
+                tf.reduce_mean(tf.square(hr_y - pred_y), axis=[1, 2, 3]).numpy()
+            )
             n_images += int(hr_batch.shape[0])
 
         def mean_std(values: List[np.ndarray]) -> Tuple[float, float]:
@@ -506,17 +597,20 @@ def train(args: argparse.Namespace) -> None:
         m_psnr, s_psnr = mean_std(psnr_vals)
         m_ssim, s_ssim = mean_std(ssim_vals)
         m_msssim, s_msssim = mean_std(msssim_vals)
+        m_mse, s_mse = mean_std(mse_vals)
 
         print(f"{name} samples evaluated: {n_images}")
-        print(f"  PSNR    : {m_psnr:.4f} ± {s_psnr:.4f} dB")
-        print(f"  SSIM    : {m_ssim:.4f} ± {s_ssim:.4f}")
-        print(f"  MS-SSIM : {m_msssim:.4f} ± {s_msssim:.4f}")
+        print(f"  MSE(Y)     : {m_mse:.6f} ± {s_mse:.6f}")
+        print(f"  PSNR(Y)    : {m_psnr:.4f} ± {s_psnr:.4f} dB")
+        print(f"  SSIM(Y)    : {m_ssim:.4f} ± {s_ssim:.4f}")
+        print(f"  MS-SSIM(Y) : {m_msssim:.4f} ± {s_msssim:.4f}")
         eval_step = history.epoch[-1] if hasattr(history, "epoch") and history.epoch else args.epochs
         with writer.as_default():
             tag_prefix = name.lower()
-            tf.summary.scalar(f"eval/{tag_prefix}_psnr", m_psnr, step=eval_step)
-            tf.summary.scalar(f"eval/{tag_prefix}_ssim", m_ssim, step=eval_step)
-            tf.summary.scalar(f"eval/{tag_prefix}_msssim", m_msssim, step=eval_step)
+            tf.summary.scalar(f"eval/{tag_prefix}_mse_y", m_mse, step=eval_step)
+            tf.summary.scalar(f"eval/{tag_prefix}_psnr_y", m_psnr, step=eval_step)
+            tf.summary.scalar(f"eval/{tag_prefix}_ssim_y", m_ssim, step=eval_step)
+            tf.summary.scalar(f"eval/{tag_prefix}_msssim_y", m_msssim, step=eval_step)
     writer.flush()
     writer.close()
 
@@ -524,25 +618,39 @@ def train(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train adaptive-depth U-Net for super-resolution.")
     parser.add_argument("--scale", type=float, required=True, help="Downscale factor (0 < scale < 1).")
-    parser.add_argument("--high_res_dir", type=str, default=str(DEFAULT_HIGH_RES_DIR), help="Directory with HR images.")
-    parser.add_argument("--low_res_dir", type=str, default=str(DEFAULT_LOW_RES_DIR), help="Optional directory with LR images; leave blank to enable synthetic degradation.")
-    parser.add_argument("--image_suffix", type=str, default=".png", help="Image suffix to filter HR files.")
-    parser.add_argument("--hr_size", type=int, default=256, help="Square crop size for HR images.")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument(
+        "--loss",
+        type=str,
+        default="charbonnier",
+        choices=["charbonnier", "l1", "combined"],
+        help="Training loss to optimise. Use 'charbonnier' or 'l1' for PSNR-focused benchmarks.",
+    )
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--val_split", type=float, default=0.1)
     parser.add_argument("--test_split", type=float, default=0.1)
     parser.add_argument("--limit", type=int, default=None, help="Optionally limit the number of training samples.")
     parser.add_argument("--seed", type=int, default=1234, help="Seed for dataset shuffling and splitting.")
-    parser.add_argument("--base_channels", type=int, default=64)
-    parser.add_argument("--residual_head_channels", type=int, default=64)
+    parser.add_argument(
+        "--eval_shave",
+        type=int,
+        default=None,
+        help="Pixels to trim from each border before computing PSNR/SSIM (default: 2 * round(1 / scale)).",
+    )
     parser.add_argument("--depth_override", type=int, default=None, help="Force a specific encoder depth.")
     parser.add_argument("--mixed_precision", action="store_true", help="Enable mixed_float16 policy.")
     parser.add_argument("--model_dir", type=str, default=str(DEFAULT_MODEL_DIR), help="Directory to store checkpoints.")
     parser.add_argument("--log_dir", type=str, default=str(DEFAULT_LOG_DIR), help="Directory to store TensorBoard logs.")
     parser.add_argument("--run_name", type=str, default=None, help="Optional explicit run name for TensorBoard.")
+    parser.add_argument("--high_res_dir", type=str, default=None, help="Override the high-resolution dataset directory.")
+    parser.add_argument(
+        "--low_res_dir",
+        type=str,
+        default=None,
+        help="Override the low-resolution dataset directory (either scale folder or its parent).",
+    )
     return parser.parse_args()
 
 

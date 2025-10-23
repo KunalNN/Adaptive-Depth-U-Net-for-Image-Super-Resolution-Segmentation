@@ -14,8 +14,8 @@ HR_TRAIN_DIR    = DATA_ROOT / "DIV2K_train_HR"
 LR_TRAIN_DIR    = DATA_ROOT / "DIV2K_train_LR_bicubic-2" / "X4"
 HR_VALID_DIR    = DATA_ROOT / "DIV2K_valid_HR"
 LR_VALID_DIR    = DATA_ROOT / "DIV2K_valid_LR_bicubic" / "X4"
-MODEL_ROOT      = DATA_ROOT / "models"
-LOG_ROOT        = DATA_ROOT / "tensorboard"
+MODEL_ROOT      = <repo>/Super_resolution/models
+LOG_ROOT        = <repo>/Super_resolution/logs/tensorboard
 VISUAL_ROOT     = <repo>/Super_resolution/scale_visualizations
 ```
 
@@ -27,8 +27,8 @@ To point the project at a different dataset copy, edit `DATA_ROOT` once; everyth
 ├── DIV2K_train_LR_bicubic-2/X4/*.png
 ├── DIV2K_valid_HR/*.png
 ├── DIV2K_valid_LR_bicubic/X4/*.png
-├── models/                       # training checkpoints
-└── tensorboard/                  # TensorBoard event files
+├── models/                       # training checkpoints (if you opt to keep them with the dataset)
+└── tensorboard/                  # TensorBoard event files (same note as above)
 ```
 
 ---
@@ -60,8 +60,8 @@ python code/train_adaptive_unet.py \
   --epochs 200 \
   --patience 20 \
   --batch_size 4 \
-  --model_dir /scratch/knarwani/Final_data/Super_resolution/models \
-  --log_dir /scratch/knarwani/Final_data/Super_resolution/tensorboard
+  --model_dir /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models \
+  --log_dir /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/tensorboard
 ```
 
 Key command-line arguments (defaults in parentheses):
@@ -99,7 +99,7 @@ Outputs are clamped to `[0, 1]`. The model also tracks PSNR as the primary metri
 Run TensorBoard from any node with access to the log directory:
 
 ```bash
-tensorboard --logdir /scratch/knarwani/Final_data/Super_resolution/tensorboard \
+tensorboard --logdir /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/tensorboard \
             --bind_all --port 6006 --reload_interval 15
 ```
 
