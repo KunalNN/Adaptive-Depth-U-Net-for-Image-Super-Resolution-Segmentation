@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2])) # because Shared is two levels up
 
-from shared.pipeline import load_image_stack, split_indices, sorted_alphanumeric
+from shared.pipeline import load_image_stack, make_tf_dataset, split_indices
 
 import argparse
 import tempfile

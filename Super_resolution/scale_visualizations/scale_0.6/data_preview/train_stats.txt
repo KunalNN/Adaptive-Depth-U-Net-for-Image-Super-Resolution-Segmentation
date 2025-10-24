@@ -1,5 +1,0 @@
-HR mean intensity:  0.4555 ± 0.0451
-LR mean intensity:  0.4555 ± 0.0451
-Samples used: 6
-HR source dir: /scratch/knarwani/Final_data/Super_resolution/DIV2K_train_HR
-LR source dir: /scratch/knarwani/Final_data/Super_resolution/DIV2K_train_LR_bicubic-2/X4

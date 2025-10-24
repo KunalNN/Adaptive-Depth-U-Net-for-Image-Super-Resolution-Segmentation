@@ -1,0 +1,7 @@
+HR mean intensity:  0.3125 ± 0.1881
+LR mean intensity:  0.3126 ± 0.1881
+Pred mean intensity: 0.3127 ± 0.1881
+Samples used: 6
+HR source dir: /scratch/knarwani/Final_data/Super_resolution/DIV2K_valid_HR
+LR source dir: /scratch/knarwani/Final_data/Super_resolution/DIV2K_valid_LR_bicubic/X4
+Model path: models/unet_adaptive_scale_new_loss0.60_depth3.keras
