@@ -1,0 +1,7 @@
+tensorflow==2.12.0
+numpy>=1.23
+opencv-python>=4.7
+scikit-image>=0.20
+tqdm>=4.65
+matplotlib>=3.7
+tensorboard>=2.12

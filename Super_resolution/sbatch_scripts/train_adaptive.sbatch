@@ -179,7 +179,7 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTEROP_THREADS=2
 
 # ─── Run configuration (override via env vars) ────────────────────────────────
-SCALE="${SCALE:-0.9}"
+SCALE="${SCALE:-1.0}"
 HR_DIR="${HR_DIR:-$DEFAULT_HR_DIR}"
 LR_DIR="${LR_DIR:-$DEFAULT_LR_DIR}"
 MODEL_DIR="${MODEL_DIR:-$DEFAULT_MODEL_ROOT}"
