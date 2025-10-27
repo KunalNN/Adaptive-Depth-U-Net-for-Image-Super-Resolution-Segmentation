@@ -137,24 +137,24 @@ Training logs are mirrored to `Super_resolution/logs/` and the compute-node scra
 
 ## 4. Visual Inspection Tools
 
-### 4.1 Dataset preview + model summary
+### 4.1 Offline evaluation CLI
 
-`code/inspect_data_and_model.py` samples HR/LR pairs, optionally runs a trained checkpoint to generate predictions, and writes diagnostic plots to `scale_visualizations/scale_<label>/data_preview`.
+`code/evaluate_model.py` loads a saved checkpoint, runs it against a validation (default) or training split, and records PSNR/SSIM/MSE metrics plus optional per-image statistics under `logs/eval_reports/`.
 
 ```bash
-python code/inspect_data_and_model.py \
-  --split train \
+python code/evaluate_model.py \
+  --model-path /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/unet_adaptive_scale_new_loss0.70_depth3.keras
   --scale 0.6 \
-  --model-path /scratch/knarwani/Final_data/Super_resolution/models/unet_adaptive_scale0.60_depth3.keras \
-  --num-samples 6 \
-  --scale-label 0.6x
+  --batch-size 4 \
+  --limit 48
 ```
 
 Outputs:
-* `*_samples.png` – HR, LR native, LR upsampled, and prediction columns.
-* `*_intensity_hist.png` – Pixel histograms for HR/LR/prediction.
-* `*_stats.txt` – Mean intensity per group and source directories.
-* `model_summary_scaleXX.txt` – Textual Keras summary of the model.
+* `stdout` – aggregate metrics (PSNR/SSIM/MS-SSIM/MSE) and sample count.
+* `config.json` – exact inputs and CLI flags used for the run.
+* `metrics.json` – summary statistics suitable for dashboards or reports.
+* `per_image_metrics.csv` – optional per-image PSNR/SSIM/MS-SSIM/MSE (omit via `--skip-per-image`).
+* All artifacts land in `logs/eval_reports/<run_name>/` (timestamped by default).
 
 ### 4.2 Evaluation notebook as Python
 

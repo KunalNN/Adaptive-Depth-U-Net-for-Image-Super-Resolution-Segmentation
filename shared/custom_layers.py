@@ -39,20 +39,37 @@ def depth_and_sizes(scale, min_res=21, max_depth=7):
     depth = min(depth, max_depth)
     return depth, sizes
 
-def custom_depth_from_scale(scale: float, max_depth: int = 7) -> int:
+def custom_depth_from_scale(
+    scale: float,
+    min_depth: int = 1,
+    max_depth: int = 7,
+    *,
+    base_resolution: int = 256,
+    min_feature: int = 21,
+) -> int:
     """
-    Decide encoder depth using a custom calculation based on scale.
+    Decide encoder depth by shrinking the spatial extent until it approaches the
+    minimum feature size or the depth limit is reached.
     """
     if not (0.05 < scale < 1.0):
         raise ValueError("Scale should be between 0 and 1 (exclusive).")
-    depth = 1
+    if min_depth < 1:
+        raise ValueError("min_depth must be at least 1.")
+    if max_depth < 1:
+        raise ValueError("max_depth must be at least 1.")
+    if base_resolution <= 0:
+        raise ValueError("base_resolution must be positive.")
+    if min_feature < 1:
+        raise ValueError("min_feature must be at least 1 pixel.")
 
-    res_base = 256
-    while res_base > 21 and depth < max_depth:
-        res_base = ceil(res_base * scale)  # round up so the map never shrinks below 1 pixel prematurely
+    depth = max(min_depth, 1)
+    feature_extent = base_resolution
+
+    while feature_extent > min_feature and depth < max_depth:
+        feature_extent = ceil(feature_extent * scale)
         depth += 1
 
-    return depth
+    return max(min_depth, min(depth, max_depth))
 
 def estimate_bottleneck_size(hr: int, scale: float, depth: int) -> int:
     """Compute the spatial extent at the bottleneck for diagnostics."""

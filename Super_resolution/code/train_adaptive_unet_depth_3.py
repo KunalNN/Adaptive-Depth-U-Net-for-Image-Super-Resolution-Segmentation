@@ -25,7 +25,7 @@ from tensorflow.keras import layers as L
 from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint
 
 from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, LOG_ROOT, MODEL_ROOT
-from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch, estimate_bottleneck_size, custom_depth_from_scale
+from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch, estimate_bottleneck_size, infer_depth_from_scale
 from shared.pipeline import degrade_image, load_rgb_image, make_tf_dataset
 
 # Science cluster enables XLA globally; Resize ops lack an XLA kernel, so disable JIT.
@@ -222,15 +222,10 @@ def build_super_resolution_unet(
     residual_head_channels: int = 64,
     depth_override: int | None = None,
     input_size: int = 256,
-    max_depth: int = 7,
 ) -> Tuple[Model, Dict[str, object]]:
     
     # Pick encoder depth explicitly or infer from the downscale factor
-    depth = (
-        depth_override
-        if depth_override is not None
-        else custom_depth_from_scale(scale, max_depth=max_depth, base_resolution=input_size)
-    )
+    depth = depth_override or infer_depth_from_scale(scale)
 
     down_layer = ResizeByScale(scale, name="enc_down") # shrinks features in the encoder
     up_layer = ResizeToMatch(name="dec_up") # upsamples to a skip-connection’s size in the decoder 
@@ -284,7 +279,6 @@ def build_super_resolution_unet(
         "depth": depth,
         "bottleneck_size": estimate_bottleneck_size(input_size, scale, depth),
         "base_channels": base_channels,
-        "max_depth": max_depth,
     }
     return model, info
 
@@ -385,9 +379,6 @@ def train(args: argparse.Namespace) -> None:
     base_channels = DEFAULT_BASE_CHANNELS
     residual_head_channels = DEFAULT_RESIDUAL_HEAD_CHANNELS
 
-    if args.max_depth < 1:
-        raise ValueError("max_depth must be at least 1.")
-
     high_res_dir_input = args.high_res_dir or DEFAULT_HIGH_RES_DIR
     high_res_dir = Path(high_res_dir_input).expanduser()
     if not high_res_dir.exists():
@@ -456,7 +447,6 @@ def train(args: argparse.Namespace) -> None:
         residual_head_channels=residual_head_channels,
         depth_override=args.depth_override,
         input_size=hr_size,
-        max_depth=args.max_depth,
     )
 
     loss_fn, metrics = build_losses_and_metrics(args.loss)
@@ -487,7 +477,6 @@ def train(args: argparse.Namespace) -> None:
     config_payload = {
         "scale": args.scale,
         "depth": info["depth"],
-        "max_depth": args.max_depth,
         "hr_size": hr_size,
         "base_channels": base_channels,
         "residual_head_channels": residual_head_channels,
@@ -651,12 +640,6 @@ def parse_args() -> argparse.Namespace:
         help="Pixels to trim from each border before computing PSNR/SSIM (default: 2 * round(1 / scale)).",
     )
     parser.add_argument("--depth_override", type=int, default=None, help="Force a specific encoder depth.")
-    parser.add_argument(
-        "--max_depth",
-        type=int,
-        default=7,
-        help="Maximum encoder depth when inferring from scale (ignored if --depth_override is set).",
-    )
     parser.add_argument("--mixed_precision", action="store_true", help="Enable mixed_float16 policy.")
     parser.add_argument("--model_dir", type=str, default=str(DEFAULT_MODEL_DIR), help="Directory to store checkpoints.")
     parser.add_argument("--log_dir", type=str, default=str(DEFAULT_LOG_DIR), help="Directory to store TensorBoard logs.")
