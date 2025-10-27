@@ -31,6 +31,8 @@ To point the project at a different dataset copy, edit `DATA_ROOT` once; everyth
 └── tensorboard/                  # TensorBoard event files (same note as above)
 ```
 
+Training no longer relies on pre-resized 256×256 frames. All entry points now sample random 256×256 patches from the full-resolution HR images and synthesise the corresponding LR patches on the fly (bicubic down → up). Validation and test runs tile each image into a deterministic grid (stride defaults to the patch size) so metrics remain comparable across scales.
+
 ---
 
 ## 2. Environment Setup
@@ -56,10 +58,11 @@ source .venv/bin/activate
 python code/train_adaptive_unet.py \
   --scale 0.6 \
   --high_res_dir /scratch/knarwani/Final_data/Super_resolution/DIV2K_train_HR \
-  --low_res_dir /scratch/knarwani/Final_data/Super_resolution/DIV2K_train_LR_bicubic-2/X4 \
   --epochs 200 \
   --patience 20 \
   --batch_size 4 \
+  --patch_size 256 \
+  --patches_per_image 4 \
   --model_dir /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models \
   --log_dir /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/tensorboard
 ```
@@ -69,9 +72,13 @@ Key command-line arguments (defaults in parentheses):
 | Flag | Description |
 |------|-------------|
 | `--scale` (**required**) | Down-sampling ratio applied during training (0 < scale < 1). |
-| `--high_res_dir` (`HR_TRAIN_DIR`) | Path to 256×256 HR images. |
-| `--low_res_dir` (`LR_TRAIN_DIR`) | Optional directory of matching LR images; omit to synthesize on the fly. |
-| `--hr_size` (256) | Crop size fed into the network. |
+| `--high_res_dir` (`HR_TRAIN_DIR`) | Path to the full-resolution DIV2K images. |
+| `--low_res_dir` | Ignored in patch mode; LR patches are generated procedurally. |
+| `--patch_size` (256) | Edge length of HR/LR patches used for training and evaluation. |
+| `--patches_per_image` (4) | Random patches drawn from each training image per epoch (set higher for more coverage). |
+| `--eval_stride` (`patch_size`) | Stride for evaluation tiling; lower values increase overlap and patch count. |
+| `--shuffle_buffer` (1024) | Shuffle buffer size for the patch dataset. |
+| `--preview_patches` (3) | Number of training patches logged to TensorBoard at step 0. |
 | `--batch_size` (4) | Batch size for all datasets. |
 | `--epochs` (200) | Max epochs before early stopping. |
 | `--patience` (20) | Patience for `EarlyStopping`. |
@@ -84,6 +91,20 @@ Key command-line arguments (defaults in parentheses):
 | `--run_name` | Override the auto-generated TensorBoard run name. |
 | `--mixed_precision` | Enable `mixed_float16` if GPUs support it. |
 
+Patch sampling is stochastic by default to increase data diversity. Runs become deterministic when you reuse the same `--seed` together with fixed values for `--patches_per_image` and `--eval_stride`, allowing fair comparisons across scale sweeps.
+
+### 3.1.1 Training modes
+
+- **Adaptive depth (default).** `code/train_adaptive_unet.py` infers the encoder/decoder depth from `--scale`. The bundled `sbatch_scripts/train_adaptive.sbatch` wrapper exposes this script for cluster runs; change only the `SCALE` env var to sweep scales while keeping depth adaptive.
+- **Fixed depth = 3.** `code/train_adaptive_unet_depth_3.py` forwards to the same trainer but forces `depth_override=3`. Submit via `sbatch_scripts/train_adaptive_depth.sbatch`, e.g.:
+
+  ```bash
+  SCALE=0.4 sbatch sbatch_scripts/train_adaptive_depth.sbatch
+  ```
+
+  This mode underpins Experiment 1 in the thesis (constant three levels, varying scale).
+
+Both sbatch wrappers set `VAL_SPLIT=TEST_SPLIT=0.05` by default so `val_loss` is available for early stopping and checkpoints.
 ### 3.2 Loss function
 
 The training objective is a weighted sum of three terms:
@@ -120,10 +141,11 @@ Useful environment overrides when submitting:
 |----------|---------|
 | `SCALE` | Set the downscale ratio (e.g., `SCALE=0.5`). |
 | `BATCH_SIZE`, `EPOCHS`, `PATIENCE`, `LEARNING_RATE` | Tune training hyperparameters. |
-| `HR_DIR`, `LR_DIR`, `MODEL_DIR`, `LOG_DIR` | Override default paths if you keep data elsewhere. |
+| `HR_DIR`, `MODEL_DIR`, `LOG_DIR` | Override default paths if you keep data elsewhere. |
 | `RUN_NAME` | Friendly label for the TensorBoard run (shows up in the UI). |
 | `MIXED_PRECISION=1` | Requests float16 training if GPUs support it. |
 | `SYNC_FROM_SHARED=0` | Skip the rsync step if data is already on node-local scratch. |
+| `PATCHES_PER_IMAGE` | Override per-image patch sampling when submitting via Slurm. |
 
 Example:
 
@@ -139,12 +161,13 @@ Training logs are mirrored to `Super_resolution/logs/` and the compute-node scra
 
 ### 4.1 Offline evaluation CLI
 
-`code/evaluate_model.py` loads a saved checkpoint, runs it against a validation (default) or training split, and records PSNR/SSIM/MSE metrics plus optional per-image statistics under `logs/eval_reports/`.
+`code/evaluate_model.py` loads a saved checkpoint, resizes each HR/LR pair to the requested size (set `--hr-size` to 256 to mirror training patches), and records PSNR/SSIM/MSE metrics plus optional per-image statistics under `logs/eval_reports/`.
 
 ```bash
 python code/evaluate_model.py \
-  --model-path /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/unet_adaptive_scale_new_loss0.70_depth3.keras
+  --model-path /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/unet_adaptive_scale_new_loss0.70_depth3.keras \
   --scale 0.6 \
+  --hr-size 256 \
   --batch-size 4 \
   --limit 48
 ```
@@ -155,6 +178,7 @@ Outputs:
 * `metrics.json` – summary statistics suitable for dashboards or reports.
 * `per_image_metrics.csv` – optional per-image PSNR/SSIM/MS-SSIM/MSE (omit via `--skip-per-image`).
 * All artifacts land in `logs/eval_reports/<run_name>/` (timestamped by default).
+* For reproducible comparisons, keep `--hr-size` and `--eval_shave` consistent across runs; a patch-aligned evaluator is on the roadmap.
 
 ### 4.2 Evaluation notebook as Python
 
@@ -175,7 +199,7 @@ Images are written to `scale_visualizations/scale_0.6x/`. By default the script 
 ## 5. Checklist / Troubleshooting
 
 * **“TensorBoard inactive”** – ensure you point `--logdir` at the node-local scratch folder if the job is still running, or copy the run directory to persistent storage before the node reboots.
-* **Missing LR files** – either rsync the DIV2K LR bicubic set to the scratch tree or omit `--low_res_dir` to let the script synthesize LR inputs on the fly.
+* **Missing LR files** – training no longer needs them; LR patches are synthesised. Keep the bicubic set only if you want to compare against the official X4 inputs.
 * **No GPUs detected** – the trainer disables mixed precision automatically; verify your Slurm allocation includes `--gres=gpu`.
 * **Changing data root** – edit `DATA_ROOT` once in `dataset_paths.py`, or set `DATA_ROOT=/path/to/data sbatch ...` when you submit jobs.
 

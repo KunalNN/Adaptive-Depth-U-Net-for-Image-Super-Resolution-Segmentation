@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2])) # because Shared is tw
 import argparse
 import glob
 import json
-import re
+import math
 from datetime import datetime
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -26,7 +26,13 @@ from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelChe
 
 from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, LOG_ROOT, MODEL_ROOT
 from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch, estimate_bottleneck_size, custom_depth_from_scale
-from shared.pipeline import degrade_image, load_rgb_image, make_tf_dataset
+from shared.pipeline import (
+    load_rgb_image_full,
+    make_eval_patch_dataset,
+    make_training_patch_dataset,
+    random_patches,
+    degrade_image,
+)
 
 # Science cluster enables XLA globally; Resize ops lack an XLA kernel, so disable JIT.
 tf.config.optimizer.set_jit(False)
@@ -180,23 +186,6 @@ def build_dataset(
     ds = ds.map(load_pair, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(batch_size)
     return ds.prefetch(tf.data.AUTOTUNE)
-
-
-def canonical_hr_key(path: str | Path) -> str:
-    """Return a normalised key for HR filenames (e.g. 0001.png -> 0001)."""
-    return Path(path).stem.lower()
-
-
-def canonical_lr_key(path: str | Path) -> str:
-    """
-    Return a normalised key for LR filenames.
-
-    DIV2K LR files include the scale suffix (e.g. 0001x4.png). Strip the trailing
-    `xN` token so that we can align them to the HR counterparts.
-    """
-    stem = Path(path).stem.lower()
-    stem = re.sub(r"x\d+$", "", stem)
-    return stem
 
 
 def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
@@ -381,7 +370,19 @@ def build_losses_and_metrics(loss_name: str) -> Tuple[tf.keras.losses.Loss, List
 
 def train(args: argparse.Namespace) -> None:
     image_suffix = DEFAULT_IMAGE_SUFFIX
-    hr_size = DEFAULT_HR_SIZE
+    patch_size = args.patch_size
+    if patch_size <= 0:
+        raise ValueError("patch_size must be a positive integer.")
+    if args.patches_per_image <= 0:
+        raise ValueError("patches_per_image must be positive.")
+    if args.eval_stride is not None and args.eval_stride <= 0:
+        raise ValueError("eval_stride must be positive when provided.")
+    if args.shuffle_buffer < 0:
+        raise ValueError("shuffle_buffer must be non-negative.")
+    if args.preview_patches < 0:
+        raise ValueError("preview_patches must be non-negative.")
+
+    hr_size = patch_size
     base_channels = DEFAULT_BASE_CHANNELS
     residual_head_channels = DEFAULT_RESIDUAL_HEAD_CHANNELS
 
@@ -401,46 +402,56 @@ def train(args: argparse.Namespace) -> None:
     if not hr_paths:
         raise ValueError("No high-resolution images found with the given suffix.")
 
-    hr_images = np.stack([load_rgb_image(path, hr_size) for path in hr_paths])
-
-    low_res_dir_choice = args.low_res_dir or DEFAULT_LOW_RES_DIR
-    low_res_dir_path: Path | None = None
-    if low_res_dir_choice:
-        low_res_dir = Path(low_res_dir_choice).expanduser()
-        if not low_res_dir.exists():
-            # Allow pointing at the parent directory that contains scale-specific folders.
-            candidates = [p for p in low_res_dir.glob("X*") if p.is_dir()]
-            if len(candidates) == 1:
-                low_res_dir = candidates[0]
-            else:
-                raise FileNotFoundError(f"Low-resolution directory not found: {low_res_dir}")
-
-        low_paths = sorted_alphanumeric(glob.glob(str(low_res_dir / f"*{image_suffix}")))
-        low_index = {canonical_lr_key(path): path for path in low_paths}
-        low_res_dir_path = low_res_dir
-
-        lr_images = []
-        for hr_path in hr_paths:
-            key = canonical_hr_key(hr_path)
-            low_path = low_index.get(key)
-            if low_path is None:
-                raise ValueError(f"Missing low-resolution counterpart for {hr_path}")
-            lr_images.append(load_rgb_image(low_path, hr_size))
-        lr_images = np.stack(lr_images)
-    else:
-        lr_images = np.stack([degrade_image(img, args.scale, hr_size) for img in hr_images])
+    if args.low_res_dir:
+        print("[info] --low_res_dir is ignored in patch mode; LR patches are generated on the fly.")
 
     train_split = 1.0 - (args.val_split + args.test_split)
     if train_split <= 0:
         raise ValueError("Validation and test splits leave no room for training data.")
 
     train_idx, val_idx, test_idx = split_indices(
-        len(hr_images), train_split, args.val_split, args.test_split, args.seed
+        len(hr_paths), train_split, args.val_split, args.test_split, args.seed
     )
 
-    train_ds = make_tf_dataset(lr_images, hr_images, train_idx, args.batch_size, shuffle=True, seed=args.seed)
-    val_ds = make_tf_dataset(lr_images, hr_images, val_idx, args.batch_size, shuffle=False, seed=args.seed)
-    test_ds = make_tf_dataset(lr_images, hr_images, test_idx, args.batch_size, shuffle=False, seed=args.seed) if len(test_idx) else None
+    train_paths = [hr_paths[i] for i in train_idx]
+    val_paths = [hr_paths[i] for i in val_idx]
+    test_paths = [hr_paths[i] for i in test_idx]
+
+    train_ds, train_patch_count = make_training_patch_dataset(
+        train_paths,
+        patch_size=patch_size,
+        patches_per_image=args.patches_per_image,
+        scale=args.scale,
+        batch_size=args.batch_size,
+        seed=args.seed,
+        shuffle_buffer=args.shuffle_buffer,
+    )
+
+    val_fit_ds = None
+    val_patch_count = 0
+    if val_paths:
+        val_fit_ds, val_patch_count, _ = make_eval_patch_dataset(
+            val_paths,
+            patch_size=patch_size,
+            scale=args.scale,
+            batch_size=args.batch_size,
+            stride=args.eval_stride,
+        )
+
+    test_patch_count = 0
+    if test_paths:
+        _, test_patch_count, _ = make_eval_patch_dataset(
+            test_paths,
+            patch_size=patch_size,
+            scale=args.scale,
+            batch_size=args.batch_size,
+            stride=args.eval_stride,
+        )
+
+    steps_per_epoch = math.ceil(train_patch_count / args.batch_size)
+    if steps_per_epoch <= 0:
+        raise ValueError("Training dataset produced zero patches. Check patches_per_image or dataset splits.")
+    val_steps = math.ceil(val_patch_count / args.batch_size) if val_patch_count else None
 
     if args.mixed_precision:
         available_gpus = tf.config.list_physical_devices("GPU")
@@ -488,19 +499,26 @@ def train(args: argparse.Namespace) -> None:
         "scale": args.scale,
         "depth": info["depth"],
         "max_depth": args.max_depth,
-        "hr_size": hr_size,
+        "patch_size": patch_size,
+        "patches_per_image": args.patches_per_image,
+        "eval_stride": args.eval_stride or patch_size,
         "base_channels": base_channels,
         "residual_head_channels": residual_head_channels,
         "learning_rate": args.learning_rate,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
         "patience": args.patience,
-        "train_samples": int(len(train_idx)),
-        "val_samples": int(len(val_idx)),
-        "test_samples": int(len(test_idx)),
+        "train_images": int(len(train_paths)),
+        "val_images": int(len(val_paths)),
+        "test_images": int(len(test_paths)),
+        "train_patches_per_epoch": int(train_patch_count),
+        "val_patches": int(val_patch_count),
+        "test_patches": int(test_patch_count),
+        "steps_per_epoch": int(steps_per_epoch),
+        "validation_steps": int(val_steps) if val_steps is not None else None,
         "mixed_precision": bool(args.mixed_precision),
         "high_res_dir": str(high_res_dir),
-        "low_res_dir": str(low_res_dir_path) if low_res_dir_path else "synthetic",
+        "low_res_mode": "synthetic_patches",
         "model_dir": str(model_dir),
         "log_dir": str(run_dir),
         "created_at": timestamp,
@@ -508,17 +526,27 @@ def train(args: argparse.Namespace) -> None:
     (run_dir / "config.json").write_text(json.dumps(config_payload, indent=2))
     (run_dir / "model_summary.txt").write_text("\n".join(summary_lines))
 
-    preview_count = min(3, len(train_idx))
+    preview_count = min(args.preview_patches, len(train_paths))
     writer = tf.summary.create_file_writer(str(run_dir))
     with writer.as_default():
         tf.summary.text("config/hyperparameters", tf.constant(json.dumps(config_payload, indent=2)), step=0)
-        tf.summary.scalar("dataset/counts/train", len(train_idx), step=0)
-        tf.summary.scalar("dataset/counts/val", len(val_idx), step=0)
-        tf.summary.scalar("dataset/counts/test", len(test_idx), step=0)
-        if preview_count > 0:
-            sel = train_idx[:preview_count]
-            hr_preview = tf.convert_to_tensor(hr_images[sel])
-            lr_preview = tf.convert_to_tensor(lr_images[sel])
+        tf.summary.scalar("dataset/images/train", len(train_paths), step=0)
+        tf.summary.scalar("dataset/images/val", len(val_paths), step=0)
+        tf.summary.scalar("dataset/images/test", len(test_paths), step=0)
+        tf.summary.scalar("dataset/patches_per_epoch/train", train_patch_count, step=0)
+        tf.summary.scalar("dataset/patches/val", val_patch_count, step=0)
+        tf.summary.scalar("dataset/patches/test", test_patch_count, step=0)
+        if preview_count > 0 and train_paths:
+            rng = np.random.default_rng(args.seed)
+            preview_hr_path = train_paths[0]
+            preview_hr_image = load_rgb_image_full(preview_hr_path)
+            hr_preview_np = random_patches(preview_hr_image, patch_size, count=preview_count, rng=rng)
+            lr_preview_np = np.stack(
+                [degrade_image(patch, args.scale, patch_size) for patch in hr_preview_np],
+                axis=0,
+            )
+            hr_preview = tf.convert_to_tensor(hr_preview_np)
+            lr_preview = tf.convert_to_tensor(lr_preview_np)
             tf.summary.image("samples/hr_train", hr_preview, step=0, max_outputs=preview_count)
             tf.summary.image("samples/lr_train", lr_preview, step=0, max_outputs=preview_count)
             tf.summary.histogram("hist/hr_train", tf.reshape(hr_preview, [-1]), step=0)
@@ -526,12 +554,17 @@ def train(args: argparse.Namespace) -> None:
         tf.summary.text("model/summary", tf.constant("\n".join(summary_lines)), step=0)
     writer.flush()
 
+    custom_dir = Path(run_dir) / "custom"
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    writer = tf.summary.create_file_writer(str(custom_dir))  # << not run_dir
+
     tensorboard_callback = tf.keras.callbacks.TensorBoard(
-        log_dir=str(run_dir),
-        histogram_freq=1,
-        write_graph=True,
+        log_dir=str(run_dir),      # Keras will write to run_dir/train and run_dir/validation
+        histogram_freq=0,
+        write_graph=False,
         write_images=False,
         profile_batch=0,
+        update_freq='epoch',       # make it explicit
     )
 
     backup_dir = run_dir / "train_backup"
@@ -546,7 +579,10 @@ def train(args: argparse.Namespace) -> None:
     history = model.fit(
         train_ds,
         epochs=args.epochs,
-        validation_data=val_ds,
+        steps_per_epoch=steps_per_epoch,
+        validation_data=val_fit_ds if val_fit_ds is not None else None,
+        validation_steps=val_steps if val_fit_ds is not None else None,
+        validation_freq=4,
         callbacks=callbacks,
         verbose=2,
     )
@@ -555,9 +591,25 @@ def train(args: argparse.Namespace) -> None:
     print(f"Model info: {info}")
     print(f"Checkpoint saved to: {ckpt_path}")
 
-    eval_targets = [("Validation", val_ds)]
-    if test_ds is not None:
-        eval_targets.append(("Test", test_ds))
+    eval_targets: List[Tuple[str, tf.data.Dataset]] = []
+    if val_paths:
+        val_eval_ds, _, _ = make_eval_patch_dataset(
+            val_paths,
+            patch_size=patch_size,
+            scale=args.scale,
+            batch_size=args.batch_size,
+            stride=args.eval_stride,
+        )
+        eval_targets.append(("Validation", val_eval_ds))
+    if test_paths:
+        test_eval_ds, _, _ = make_eval_patch_dataset(
+            test_paths,
+            patch_size=patch_size,
+            scale=args.scale,
+            batch_size=args.batch_size,
+            stride=args.eval_stride,
+        )
+        eval_targets.append(("Test", test_eval_ds))
 
     if args.eval_shave is not None:
         eval_shave = max(0, int(args.eval_shave))
@@ -576,7 +628,7 @@ def train(args: argparse.Namespace) -> None:
 
     for name, dataset in eval_targets:
         psnr_vals, ssim_vals, msssim_vals, mse_vals = [], [], [], []
-        n_images = 0
+        n_patches = 0
         for lr_batch, hr_batch in dataset:
             pred_rgb = model(lr_batch, training=False)
             pred_rgb = tf.cast(tf.clip_by_value(pred_rgb, 0.0, 1.0), tf.float32)
@@ -595,7 +647,7 @@ def train(args: argparse.Namespace) -> None:
             mse_vals.append(
                 tf.reduce_mean(tf.square(hr_y - pred_y), axis=[1, 2, 3]).numpy()
             )
-            n_images += int(hr_batch.shape[0])
+            n_patches += int(hr_batch.shape[0])
 
         def mean_std(values: List[np.ndarray]) -> Tuple[float, float]:
             arr = np.concatenate(values, axis=0).astype(np.float64)
@@ -610,7 +662,7 @@ def train(args: argparse.Namespace) -> None:
         m_msssim, s_msssim = mean_std(msssim_vals)
         m_mse, s_mse = mean_std(mse_vals)
 
-        print(f"{name} samples evaluated: {n_images}")
+        print(f"{name} patches evaluated: {n_patches}")
         print(f"  MSE(Y)     : {m_mse:.6f} ± {s_mse:.6f}")
         print(f"  PSNR(Y)    : {m_psnr:.4f} ± {s_psnr:.4f} dB")
         print(f"  SSIM(Y)    : {m_ssim:.4f} ± {s_ssim:.4f}")
@@ -644,6 +696,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test_split", type=float, default=0.1)
     parser.add_argument("--limit", type=int, default=None, help="Optionally limit the number of training samples.")
     parser.add_argument("--seed", type=int, default=1234, help="Seed for dataset shuffling and splitting.")
+    parser.add_argument("--patch_size", type=int, default=DEFAULT_HR_SIZE, help="Side length for HR/LR training patches.")
+    parser.add_argument(
+        "--patches_per_image",
+        type=int,
+        default=4,
+        help="Random patches sampled per image for each training epoch.",
+    )
+    parser.add_argument(
+        "--eval_stride",
+        type=int,
+        default=None,
+        help="Stride to use when tiling evaluation patches (defaults to patch_size).",
+    )
+    parser.add_argument(
+        "--shuffle_buffer",
+        type=int,
+        default=1024,
+        help="Shuffle buffer size for the training patch dataset.",
+    )
+    parser.add_argument(
+        "--preview_patches",
+        type=int,
+        default=3,
+        help="Number of training patches to log to TensorBoard at step 0.",
+    )
     parser.add_argument(
         "--eval_shave",
         type=int,
@@ -666,7 +743,7 @@ def parse_args() -> argparse.Namespace:
         "--low_res_dir",
         type=str,
         default=None,
-        help="Override the low-resolution dataset directory (either scale folder or its parent).",
+        help="Ignored in patch mode; low-resolution patches are synthesised on the fly.",
     )
     return parser.parse_args()
 

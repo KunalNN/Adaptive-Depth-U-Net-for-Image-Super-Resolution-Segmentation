@@ -1,0 +1,20 @@
+{
+  "scale": 0.7,
+  "depth": 3,
+  "hr_size": 256,
+  "base_channels": 64,
+  "residual_head_channels": 64,
+  "learning_rate": 0.0001,
+  "batch_size": 4,
+  "epochs": 200,
+  "patience": 15,
+  "train_samples": 640,
+  "val_samples": 80,
+  "test_samples": 80,
+  "mixed_precision": false,
+  "high_res_dir": "/scratch/knarwani/Final_data/Super_resolution/DIV2K_train_HR",
+  "low_res_dir": "/scratch/knarwani/Final_data/Super_resolution/DIV2K_train_LR_bicubic-2/X4",
+  "model_dir": "/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models",
+  "log_dir": "/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/tensorboard/scale0.70_bs4_lr1e-04_20251024-151041",
+  "created_at": "20251024-151041"
+}

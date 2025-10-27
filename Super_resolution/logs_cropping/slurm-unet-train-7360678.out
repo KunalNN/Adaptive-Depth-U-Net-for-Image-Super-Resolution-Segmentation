@@ -1,0 +1,53 @@
+Job:        unet-train
+Job ID:     7360678
+Node:       cn47
+GPU(s):     0
+Started at: Sun Oct 26 07:18:26 PM CET 2025
+[warn] CUDA_MODULE not set; relying on system CUDA at /opt/cuda
+[warn] CUDNN_MODULE not set; assuming cuDNN bundled with CUDA module.
+No Modulefiles Currently Loaded.
+[stage] Syncing data from /vol/csedu-nobackup/project/cseduproject/Final_data/Super_resolution to /scratch/knarwani/Final_data/Super_resolution
+python: /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/.venv/bin/python
+tf: 2.16.1
+gpus: [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
+[config] data_root=/scratch/knarwani/Final_data/Super_resolution scale=1.0 hr_dir=/scratch/knarwani/Final_data/Super_resolution/DIV2K_train_HR lr_dir=/scratch/knarwani/Final_data/Super_resolution/DIV2K_train_LR_bicubic-2/X4 model_dir=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models log_dir=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/tensorboard epochs=200 patience=15
+[run] python -u /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/code/train_adaptive_unet.py --scale 1.0 ...
+Traceback (most recent call last):
+  File "/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/code/train_adaptive_unet.py", line 659, in <module>
+    train(args)
+  File "/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/code/train_adaptive_unet.py", line 444, in train
+    model, info = build_super_resolution_unet(
+  File "/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/code/train_adaptive_unet.py", line 228, in build_super_resolution_unet
+    depth = depth_override or infer_depth_from_scale(scale)
+  File "/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/shared/custom_layers.py", line 18, in infer_depth_from_scale
+    raise ValueError("Scale should be between 0 and 1 (exclusive).")
+ValueError: Scale should be between 0 and 1 (exclusive).
+
+
+###############################################################################
+Science Cluster
+Job 7360678 for user 'knarwani'
+Finished at: Sun Oct 26 19:20:03 CET 2025
+
+Job details:
+============
+
+Name                : unet-train
+User                : knarwani
+Partition           : csedu-prio
+Nodes               : cn47
+Cores               : 4
+State               : FAILED
+Submit              : 2025-10-26T11:19:16
+Start               : 2025-10-26T19:18:26
+End                 : 2025-10-26T19:20:03
+Reserved walltime   : 04:00:00
+Used walltime       : 00:01:37
+Used CPU time       : 00:01:44 (efficiency: 26.87%)
+% User (Computation): 89.24%
+% System (I/O)      : 10.76%
+Mem reserved        : 15G
+Max Mem used        : 704.36M (cn47)
+Max Disk Write      : 10.24K (cn47)
+Max Disk Read       : 39.33M (cn47)
+

@@ -25,12 +25,10 @@ parent_root = PROJECT_ROOT.parent
 if str(parent_root) not in sys.path:
     sys.path.append(str(parent_root))
 
-from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, HR_VALID_DIR, LR_VALID_DIR  # noqa: E402
-from shared.pipeline import degrade_image, load_rgb_image, sorted_alphanumeric  # noqa: E402
+from dataset_paths import HR_TRAIN_DIR, HR_VALID_DIR  # noqa: E402
+from shared.pipeline import make_eval_patch_dataset, sorted_alphanumeric  # noqa: E402
 from train_adaptive_unet import (  # noqa: E402
     build_super_resolution_unet,
-    canonical_hr_key,
-    canonical_lr_key,
     rgb_to_luma_bt601,
 )
 
@@ -54,60 +52,6 @@ def infer_eval_shave(scale: float, explicit: int | None) -> int:
     inv_scale = 1.0 / scale if scale > 0 else 0.0
     scale_factor = int(round(inv_scale)) if inv_scale > 0 else 0
     return 2 * scale_factor if scale_factor > 0 else 0
-
-
-def resolve_lr_directory(candidate: Path | None) -> Path | None:
-    if candidate is None:
-        return None
-    if candidate.exists():
-        return candidate
-    matches = [p for p in candidate.glob("X*") if p.is_dir()]
-    if len(matches) == 1:
-        return matches[0]
-    raise FileNotFoundError(f"Low-resolution directory not found: {candidate}")
-
-
-def load_image_pairs(
-    hr_dir: Path,
-    lr_dir: Path | None,
-    hr_size: int,
-    scale: float,
-    limit: int | None,
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-    hr_files = sorted_alphanumeric(
-        glob.glob(str(hr_dir / "*.png"))
-    )
-    if limit is not None and limit > 0:
-        hr_files = hr_files[:limit]
-    if not hr_files:
-        raise ValueError(f"No high-resolution PNG files found in {hr_dir}")
-
-    hr_images = np.stack([load_rgb_image(path, hr_size) for path in hr_files])
-
-    if lr_dir is None:
-        lr_images = np.stack([degrade_image(img, scale, hr_size) for img in hr_images])
-    else:
-        lr_files = sorted_alphanumeric(glob.glob(str(lr_dir / "*.png")))
-        lr_index = {canonical_lr_key(path): path for path in lr_files}
-        collected = []
-        for hr_path in hr_files:
-            key = canonical_hr_key(hr_path)
-            match = lr_index.get(key)
-            if match is None:
-                raise ValueError(f"Missing LR counterpart for {hr_path}")
-            collected.append(load_rgb_image(match, hr_size))
-        lr_images = np.stack(collected)
-
-    return lr_images.astype(np.float32), hr_images.astype(np.float32), [Path(p).name for p in hr_files]
-
-
-def build_eval_dataset(
-    lr_images: np.ndarray,
-    hr_images: np.ndarray,
-    batch_size: int,
-) -> tf.data.Dataset:
-    ds = tf.data.Dataset.from_tensor_slices((lr_images, hr_images))
-    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 
 def load_checkpoint_model(
