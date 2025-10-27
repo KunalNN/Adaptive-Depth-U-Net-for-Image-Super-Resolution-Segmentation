@@ -103,7 +103,7 @@ tensorboard --logdir /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Su
             --bind_all --port 6006 --reload_interval 15
 ```
 
-Forward the port to your laptop (`ssh -L 6006:<node>:6006`) and open `http://localhost:6006`. The Scalars tab shows loss/PSNR, Images contains optional samples, and Graphs includes the full network topology.
+Forward the port to your laptop (` ssh -L 6006:cn84:6006 knarwani@cnlogin22.science.ru.nl`) and open `http://localhost:6006`. The Scalars tab shows loss/PSNR, Images contains optional samples, and Graphs includes the full network topology.
 
 ### 3.4 Cluster (Slurm) workflow
 

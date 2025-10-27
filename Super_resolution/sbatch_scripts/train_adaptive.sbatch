@@ -179,16 +179,16 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK:-4}
 export TF_NUM_INTEROP_THREADS=2
 
 # ─── Run configuration (override via env vars) ────────────────────────────────
-SCALE="${SCALE:-1.0}"
+SCALE="${SCALE:-0.9}"
 HR_DIR="${HR_DIR:-$DEFAULT_HR_DIR}"
 LR_DIR="${LR_DIR:-$DEFAULT_LR_DIR}"
 MODEL_DIR="${MODEL_DIR:-$DEFAULT_MODEL_ROOT}"
 LOG_DIR="${LOG_DIR:-$DEFAULT_TB_ROOT}"
-BATCH_SIZE="${BATCH_SIZE:-4}"
+BATCH_SIZE="${BATCH_SIZE:-1}"
 EPOCHS="${EPOCHS:-200}"
 PATIENCE="${PATIENCE:-15}"
 USE_MIXED_PRECISION="${MIXED_PRECISION:-0}"
-EXTRA_ARGS="${EXTRA_ARGS:-}"
+EXTRA_ARGS="${EXTRA_ARGS:---depth_override 3}"
 
 if [[ ! -d "$HR_DIR" ]]; then
   echo "[error] High-resolution directory not found: $HR_DIR" >&2
@@ -198,74 +198,6 @@ fi
 if [[ ! -d "$LR_DIR" ]]; then
   echo "[error] Low-resolution directory not found: $LR_DIR" >&2
   exit 1
-fi
-
-# ─── Adaptive depth lookup (logged for reproducibility) ───────────────────────
-SCALE_FORMATTED="$(printf "%.2f" "$SCALE")"
-declare -a DEPTH_THRESHOLDS=("0.25" "0.35" "0.45" "0.55" "0.65" "0.80" "0.95")
-declare -a TABLE_SCALES=("0.20" "0.30" "0.40" "0.50" "0.60" "0.70" "0.90")
-declare -a TABLE_FEATURES=(
-  "256 -> 52"
-  "256 -> 77 -> 24"
-  "256 -> 103 -> 42 -> 17"
-  "256 -> 128 -> 64 -> 32"
-  "256 -> 154 -> 92 -> 55 -> 33"
-  "256 -> 180 -> 126 -> 88 -> 61 -> 43"
-  "256 -> 230 -> 207 -> 187 -> 168 -> 151 -> 136"
-)
-declare -a TABLE_DEPTHS=("1" "2" "3" "3" "4" "5" "6")
-declare -a TABLE_NOTES=(
-  "Keep features >= ~50px; avoids collapsing to tiny maps"
-  "Adds one more stage without making maps too tiny"
-  "Balanced depth; min map ~17px"
-  "Strong baseline; efficient and stable"
-  ""
-  "More capacity where detail is higher"
-  "Deepest; preserves large maps, high compute/memory"
-)
-
-adaptive_depth=""
-selected_row_index=-1
-for idx in "${!DEPTH_THRESHOLDS[@]}"; do
-  threshold=${DEPTH_THRESHOLDS[$idx]}
-  if awk -v s="$SCALE" -v t="$threshold" 'BEGIN {exit !(s <= t)}'; then
-    adaptive_depth="${TABLE_DEPTHS[$idx]}"
-    selected_row_index=$idx
-    break
-  fi
-done
-if [[ -z "$adaptive_depth" ]]; then
-  last_index=$(( ${#TABLE_DEPTHS[@]} - 1 ))
-  adaptive_depth="${TABLE_DEPTHS[$last_index]}"
-  selected_row_index=$last_index
-fi
-
-echo "[adaptive-depth] Encoder depth lookup table (scale=${SCALE_FORMATTED})"
-echo "| **Scale** | **Internal Feature Map Sizes (Input -> ...)** | **Depth (Downsamples)** | **PSNR (dB)** | **SSIM** | **Notes** |"
-echo "| --- | --- | --- | --- | --- | --- |"
-for idx in "${!TABLE_SCALES[@]}"; do
-  row_scale="${TABLE_SCALES[$idx]}"
-  features="${TABLE_FEATURES[$idx]}"
-  depth="${TABLE_DEPTHS[$idx]}"
-  notes="${TABLE_NOTES[$idx]}"
-  if (( idx == selected_row_index )); then
-    row_scale="**${row_scale}**"
-  fi
-  echo "| ${row_scale} | ${features} | ${depth} |  |  | ${notes} |"
-done
-
-echo "[adaptive-depth] Selected encoder depth: ${adaptive_depth} downsamples (table row ${TABLE_SCALES[$selected_row_index]})."
-
-manual_depth_source=""
-if [[ -n "${DEPTH_OVERRIDE:-}" ]]; then
-  manual_depth_source="DEPTH_OVERRIDE env=${DEPTH_OVERRIDE}"
-elif [[ "$EXTRA_ARGS" == *"--depth_override"* ]]; then
-  manual_depth_source="EXTRA_ARGS"
-fi
-
-if [[ -n "$manual_depth_source" ]]; then
-  echo "[adaptive-depth] Manual depth override detected via ${manual_depth_source}; auto depth will not be passed to the training script."
-  adaptive_depth=""
 fi
 
 MIXED_FLAG=""
@@ -312,10 +244,6 @@ fi
 if [[ -n "$EXTRA_ARGS" ]]; then
   # shellcheck disable=SC2206
   CMD+=($EXTRA_ARGS)
-fi
-
-if [[ -n "$adaptive_depth" ]]; then
-  CMD+=(--depth_override "$adaptive_depth")
 fi
 
 "${CMD[@]}" 2>&1 | tee "$LOGFILE"

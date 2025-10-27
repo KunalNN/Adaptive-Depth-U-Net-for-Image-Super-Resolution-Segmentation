@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, Tuple
-
+from math import ceil
 import tensorflow as tf
 from keras.saving import register_keras_serializable
 from tensorflow.keras import layers as L
@@ -27,6 +27,32 @@ def infer_depth_from_scale(scale: float, min_depth: int = 1, max_depth: int = 4)
     depth = max(min_depth, min(depth, max_depth))
     return depth
 
+
+def depth_and_sizes(scale, min_res=21, max_depth=7):
+    depth = 1
+    sizes = [256]
+    res = 256
+    while res > min_res and depth < max_depth:
+        res = ceil(res * scale)
+        sizes.append(res)
+        depth += 1
+    depth = min(depth, max_depth)
+    return depth, sizes
+
+def custom_depth_from_scale(scale: float, max_depth: int = 7) -> int:
+    """
+    Decide encoder depth using a custom calculation based on scale.
+    """
+    if not (0.05 < scale < 1.0):
+        raise ValueError("Scale should be between 0 and 1 (exclusive).")
+    depth = 1
+
+    res_base = 256
+    while res_base > 21 and depth < max_depth:
+        res_base = ceil(res_base * scale)  # round up so the map never shrinks below 1 pixel prematurely
+        depth += 1
+
+    return depth
 
 def estimate_bottleneck_size(hr: int, scale: float, depth: int) -> int:
     """Compute the spatial extent at the bottleneck for diagnostics."""
