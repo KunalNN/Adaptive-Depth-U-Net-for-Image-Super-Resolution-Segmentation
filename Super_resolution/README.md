@@ -155,6 +155,21 @@ SCALE=0.6 BATCH_SIZE=8 RUN_NAME=scale06_final sbatch sbatch_scripts/train_adapti
 
 Training logs are mirrored to `Super_resolution/logs/` and the compute-node scratch tree. Once the job ends, copy any checkpoints or logs you want to keep off scratch before the scheduled purge.
 
+### 3.5 Batch experiments
+
+The folder `Super_resolution/sbatch_scripts` also contains helper drivers that wrap `train_adaptive_simple.sbatch` for reproducible sweeps. In particular, `run_experiment_fixed_depth.sh` reproduces Experiment 1 (constant three-level encoder/decoder, varying scale). When executed it:
+
+1. Creates `Super_resolution/experiments/experiment_1_constant_depth_3/` with dedicated `logs/`, `models/`, and `metadata/` subdirectories.
+2. Submits one Slurm job per scale in `[0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.90]`, pinning `--depth_override 3` and adjusting the batch size so each run fits on a single 2080 Ti.
+3. Writes a timestamped metadata file summarising each submission (scale, batch size, depth, log/model paths) under `metadata/`.
+
+```bash
+cd Super_resolution
+bash sbatch_scripts/run_experiment_fixed_depth.sh
+```
+
+Every job uses a unique TensorBoard log directory, so scalars and images stay grouped by scale. Checkpoint files are written to matching `experiments/experiment_1_constant_depth_3/models/<run>/` folders. Use `squeue -u $USER` to monitor progress, and point TensorBoard at the experiment’s `logs/` directory when comparing runs.
+
 ---
 
 ## 4. Visual Inspection Tools
