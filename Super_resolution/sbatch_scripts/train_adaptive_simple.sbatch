@@ -5,7 +5,7 @@
 #SBATCH --qos=csedu-normal
 #SBATCH --gres=gpu:1
 #SBATCH -c 4
-#SBATCH --mem=24G
+#SBATCH --mem=31G
 #SBATCH --time=08:00:00
 #SBATCH -J unet-train-simple
 #SBATCH --output=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out

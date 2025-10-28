@@ -5,6 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH -c 4
 #SBATCH --mem=15G
+#SBATCH --exclude=cn48 # Exclude problematic node as it has outdated CUDA drivers
 #SBATCH -t 04:00:00
 #SBATCH -J unet-train
 #SBATCH --output=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out

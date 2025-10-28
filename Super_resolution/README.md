@@ -161,13 +161,14 @@ Training logs are mirrored to `Super_resolution/logs/` and the compute-node scra
 
 ### 4.1 Offline evaluation CLI
 
-`code/evaluate_model.py` loads a saved checkpoint, resizes each HR/LR pair to the requested size (set `--hr-size` to 256 to mirror training patches), and records PSNR/SSIM/MSE metrics plus optional per-image statistics under `logs/eval_reports/`.
+`code/evaluate_model.py` loads a saved checkpoint, tiles each validation image into deterministic `patch_size × patch_size` crops, and reports PSNR/SSIM/MSE metrics (plus optional per-patch CSV logs) under `logs/eval_reports/`.
 
 ```bash
 python code/evaluate_model.py \
   --model-path /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/unet_adaptive_scale_new_loss0.70_depth3.keras \
   --scale 0.6 \
-  --hr-size 256 \
+  --patch-size 256 \
+  --eval-stride 256 \
   --batch-size 4 \
   --limit 48
 ```
@@ -176,9 +177,9 @@ Outputs:
 * `stdout` – aggregate metrics (PSNR/SSIM/MS-SSIM/MSE) and sample count.
 * `config.json` – exact inputs and CLI flags used for the run.
 * `metrics.json` – summary statistics suitable for dashboards or reports.
-* `per_image_metrics.csv` – optional per-image PSNR/SSIM/MS-SSIM/MSE (omit via `--skip-per-image`).
+* `per_image_metrics.csv` – optional per-patch PSNR/SSIM/MS-SSIM/MSE (omit via `--skip-per-image`).
 * All artifacts land in `logs/eval_reports/<run_name>/` (timestamped by default).
-* For reproducible comparisons, keep `--hr-size` and `--eval_shave` consistent across runs; a patch-aligned evaluator is on the roadmap.
+* Use `--eval-stride` (default = `patch_size`) to control how densely tiles overlap; keeping the same values across runs ensures reproducible comparisons.
 
 ### 4.2 Evaluation notebook as Python
 

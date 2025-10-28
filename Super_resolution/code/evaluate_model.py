@@ -57,7 +57,7 @@ def infer_eval_shave(scale: float, explicit: int | None) -> int:
 def load_checkpoint_model(
     model_path: Path,
     scale: float,
-    hr_size: int,
+    patch_size: int,
     depth_override: int | None,
 ) -> tf.keras.Model:
     from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch  # noqa: E402
@@ -83,7 +83,7 @@ def load_checkpoint_model(
         )
         model, _ = build_super_resolution_unet(
             scale=scale,
-            input_size=hr_size,
+            input_size=patch_size,
             depth_override=depth_override,
         )
         model.load_weights(model_path)
@@ -194,20 +194,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-path", type=Path, required=True, help="Path to the saved .keras or .h5 checkpoint.")
     parser.add_argument("--scale", type=float, required=True, help="Downscale factor used during training (0 < scale < 1).")
     parser.add_argument("--hr-dir", type=Path, default=Path(HR_VALID_DIR), help="Directory of high-resolution images to evaluate.")
+    parser.add_argument("--patch-size", type=int, default=256, help="Patch size (matches training crops).")
     parser.add_argument(
-        "--lr-dir",
-        type=Path,
-        default=Path(LR_VALID_DIR),
-        help="Directory of low-resolution images. Omit or set to '' to synthesise LR inputs.",
+        "--eval-stride",
+        type=int,
+        default=None,
+        help="Stride used when tiling evaluation patches (default: patch size).",
     )
-    parser.add_argument("--hr-size", type=int, default=256, help="Image size used during training.")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--limit", type=int, default=None, help="Optionally limit the number of evaluation samples.")
     parser.add_argument("--eval-shave", type=int, default=None, help="Crop border pixels before metrics (mirrors training logic).")
     parser.add_argument("--depth-override", type=int, default=None, help="Force a specific encoder depth when rebuilding the model.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Directory to store evaluation reports.")
     parser.add_argument("--run-name", type=str, default=None, help="Optional folder name inside --output-dir.")
-    parser.add_argument("--skip-per-image", action="store_true", help="Do not write per-image CSV metrics.")
+    parser.add_argument("--skip-per-image", action="store_true", help="Do not write per-patch CSV metrics.")
     parser.add_argument("--use-train-split", action="store_true", help="Evaluate against the training split defaults instead of validation.")
     return parser.parse_args()
 
@@ -218,36 +218,37 @@ def main() -> None:
     if args.use_train_split:
         if args.hr_dir == Path(HR_VALID_DIR):
             args.hr_dir = Path(HR_TRAIN_DIR)
-        if args.lr_dir == Path(LR_VALID_DIR):
-            args.lr_dir = Path(LR_TRAIN_DIR)
 
     hr_dir = Path(args.hr_dir).expanduser()
     if not hr_dir.exists():
         raise FileNotFoundError(f"High-resolution directory not found: {hr_dir}")
 
-    lr_dir = resolve_lr_directory(Path(args.lr_dir).expanduser()) if args.lr_dir else None
+    hr_files = sorted_alphanumeric(glob.glob(str(hr_dir / "*.png")))
+    if args.limit is not None and args.limit > 0:
+        hr_files = hr_files[:args.limit]
+    if not hr_files:
+        raise ValueError(f"No high-resolution PNG files found in {hr_dir}")
 
-    lr_images, hr_images, filenames = load_image_pairs(
-        hr_dir=hr_dir,
-        lr_dir=lr_dir,
-        hr_size=args.hr_size,
+    eval_ds, total_patches, patch_labels = make_eval_patch_dataset(
+        hr_files,
+        patch_size=args.patch_size,
         scale=args.scale,
-        limit=args.limit,
+        batch_size=args.batch_size,
+        stride=args.eval_stride,
     )
 
-    dataset = build_eval_dataset(lr_images, hr_images, args.batch_size)
     model = load_checkpoint_model(
         model_path=args.model_path.expanduser(),
         scale=args.scale,
-        hr_size=args.hr_size,
+        patch_size=args.patch_size,
         depth_override=args.depth_override,
     )
 
     eval_shave = infer_eval_shave(args.scale, args.eval_shave)
-    summary, per_image = evaluate(model, dataset, eval_shave=eval_shave)
-    attach_filenames(per_image, filenames)
+    summary, per_patch = evaluate(model, eval_ds, eval_shave=eval_shave)
+    attach_filenames(per_patch, patch_labels)
 
-    print(f"Evaluated {summary.samples} samples.")
+    print(f"Evaluated {summary.samples} patches ({len(hr_files)} images).")
     print(f"  PSNR(Y):     {summary.psnr_mean:.4f} ± {summary.psnr_std:.4f} dB")
     print(f"  SSIM(Y):     {summary.ssim_mean:.4f} ± {summary.ssim_std:.4f}")
     print(f"  MS-SSIM(Y):  {summary.msssim_mean:.4f} ± {summary.msssim_std:.4f}")
@@ -262,20 +263,21 @@ def main() -> None:
         "model_path": str(args.model_path.expanduser()),
         "scale": args.scale,
         "hr_dir": str(hr_dir),
-        "lr_dir": str(lr_dir) if lr_dir else "synthetic",
-        "hr_size": args.hr_size,
+        "patch_size": args.patch_size,
+        "eval_stride": args.eval_stride or args.patch_size,
         "batch_size": args.batch_size,
         "limit": args.limit,
         "eval_shave": eval_shave,
         "depth_override": args.depth_override,
         "samples": summary.samples,
+        "images": len(hr_files),
         "created_at": timestamp,
     }
 
     write_outputs(
         run_dir=run_dir,
         summary=summary,
-        per_image=per_image,
+        per_image=per_patch,
         config=config_payload,
         write_per_image=not args.skip_per_image,
     )

@@ -437,6 +437,7 @@ def train(args: argparse.Namespace) -> None:
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
+        val_fit_ds = val_fit_ds.repeat()
 
     test_patch_count = 0
     if test_paths:

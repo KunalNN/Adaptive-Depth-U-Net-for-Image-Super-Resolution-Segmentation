@@ -65,8 +65,11 @@ def custom_depth_from_scale(
     depth = max(min_depth, 1)
     feature_extent = base_resolution
 
-    while feature_extent > min_feature and depth < max_depth:
-        feature_extent = ceil(feature_extent * scale)
+    while depth < max_depth:
+        candidate = ceil(feature_extent * scale)
+        if candidate < min_feature:
+            break
+        feature_extent = candidate
         depth += 1
 
     return max(min_depth, min(depth, max_depth))
