@@ -170,6 +170,19 @@ bash sbatch_scripts/run_experiment_fixed_depth.sh
 
 Every job uses a unique TensorBoard log directory, so scalars and images stay grouped by scale. Checkpoint files are written to matching `experiments/experiment_1_constant_depth_3/models/<run>/` folders. Use `squeue -u $USER` to monitor progress, and point TensorBoard at the experiment’s `logs/` directory when comparing runs.
 
+For Experiment 2 (adaptive encoder depth that follows the architectural design table), use `run_experiment_adaptive_depth.sh`. This script:
+
+1. Creates `Super_resolution/experiments/experiment_2_adaptive_depth/` with separate `logs/`, `models/`, and `metadata/` trees; node-local copies live under `/scratch/<user>/Final_data/Super_resolution/experiments/experiment_2_adaptive_depth/`.
+2. Submits one job per scale in `[0.20 … 0.90]`, pairing each scale with its target depth (`1 → 7`) and a GPU-friendly batch size (e.g. scale 0.90 → depth 7, batch size 1).
+3. Pins both `--depth_override` and `--max_depth` so the network width matches the table, and records the submission metadata just like Experiment 1.
+
+```bash
+cd Super_resolution
+bash sbatch_scripts/run_experiment_adaptive_depth.sh
+```
+
+Keep an eye on the larger scales (0.80/0.90) if you tweak batch sizes; they are tuned to stay within a single 2080 Ti’s 11 GB memory budget.
+
 ---
 
 ## 4. Visual Inspection Tools

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Launch Experiment 1: fixed depth (3 levels) while sweeping the requested
-# reconstruction scale. Each sbatch submission reuses train_adaptive_simple.sbatch
-# and pins the encoder depth to three levels by passing --depth_override 3.
+# Launch Experiment 2: adaptive depth per scale based on the architectural design table.
+# Each sbatch submission reuses train_adaptive_simple.sbatch and configures the encoder
+# depth to the per-scale target while keeping batch sizes within 2080 Ti limits.
 
 set -euo pipefail
 
@@ -16,8 +16,8 @@ if [[ ! -d "$SCRATCH_ROOT" ]]; then
   exit 1
 fi
 
-REPO_EXPERIMENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)/experiments/experiment_1_constant_depth_3"
-SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiments/experiment_1_constant_depth_3"
+REPO_EXPERIMENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)/experiments/experiment_2_adaptive_depth"
+SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiments/experiment_2_adaptive_depth"
 
 LOG_BASE="$SCRATCH_EXPERIMENT_ROOT/logs"
 MODEL_BASE="$SCRATCH_EXPERIMENT_ROOT/models"
@@ -30,7 +30,7 @@ fi
 
 mkdir -p "$LOG_BASE" "$MODEL_BASE" "$META_BASE"
 
-# Scale sweep defined in Table 1 (Experiment 1).
+# Design table: target depth per scale with conservative batch sizes for a 2080 Ti.
 SCALES=(
   0.20
   0.30
@@ -38,24 +38,37 @@ SCALES=(
   0.50
   0.60
   0.70
+  0.80
   0.90
 )
 
-# Batch sizes chosen conservatively so the largest scales fit on a 2080 Ti.
+declare -A DEPTH_FOR_SCALE=(
+  [0.20]=1
+  [0.30]=2
+  [0.40]=3
+  [0.50]=3
+  [0.60]=4
+  [0.70]=5
+  [0.80]=6
+  [0.90]=7
+)
+
 declare -A BATCH_SIZE_FOR_SCALE=(
   [0.20]=8
   [0.30]=8
-  [0.40]=8
-  [0.50]=6
-  [0.60]=4
+  [0.40]=6
+  [0.50]=4
+  [0.60]=3
   [0.70]=2
+  [0.80]=1
   [0.90]=1
 )
 
-echo "Submitting Experiment 1 runs (depth=3, varying scale)"
+echo "Submitting Experiment 2 runs (adaptive depth per scale)"
 for scale in "${SCALES[@]}"; do
-  batch_size="${BATCH_SIZE_FOR_SCALE[$scale]:-4}"
-  run_name="exp1_depth3_scale${scale}"
+  depth="${DEPTH_FOR_SCALE[$scale]:-3}"
+  batch_size="${BATCH_SIZE_FOR_SCALE[$scale]:-2}"
+  run_name="exp2_adaptive_depth_scale${scale}"
   timestamp="$(date +%Y%m%d-%H%M%S)"
   run_suffix="${run_name}_${timestamp}"
   log_dir="$LOG_BASE/$run_suffix"
@@ -67,20 +80,20 @@ for scale in "${SCALES[@]}"; do
   export LOG_DIR="$log_dir"
   export MODEL_DIR="$model_dir"
   export RUN_NAME="$run_name"
-  export EXTRA_ARGS="--depth_override 3"
+  export EXTRA_ARGS="--depth_override ${depth} --max_depth ${depth}"
 
   {
     echo "scale=${scale}"
     echo "batch_size=${batch_size}"
-    echo "depth=3"
+    echo "depth=${depth}"
     echo "run_name=${run_name}"
     echo "log_dir=${log_dir}"
     echo "model_dir=${model_dir}"
     echo "submitted=$(date --iso-8601=seconds)"
   } > "$META_BASE/${run_suffix}.txt"
 
-  echo "  -> scale=${scale}, batch_size=${batch_size}, run_name=${run_name}, log_dir=${log_dir}, model_dir=${model_dir}"
+  echo "  -> scale=${scale}, depth=${depth}, batch_size=${batch_size}, run_name=${run_name}"
   sbatch "$SBATCH_SCRIPT"
 done
 
-echo "All Experiment 1 jobs submitted. Use 'squeue -u $USER' to monitor them."
+echo "All Experiment 2 jobs submitted. Use 'squeue -u $USER' to monitor them."

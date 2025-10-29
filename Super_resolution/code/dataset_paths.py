@@ -21,7 +21,7 @@ HR_VALID_DIR = DATA_ROOT / "DIV2K_valid_HR"
 LR_VALID_DIR = DATA_ROOT / "DIV2K_valid_LR_bicubic" / "X4"
 
 # Model checkpoints live inside the repo so they survive node-local scratch purges.
-MODEL_ROOT = Path(__file__).resolve().parents[1] / "models"
+MODEL_ROOT = "scratch/knarwani/Final_data/Super_resolution/models"
 
 # TensorBoard logs for training/evaluation runs live in the repo, so they can be
 # tailed via TensorBoard while a job runs and persist after node shutdown.
