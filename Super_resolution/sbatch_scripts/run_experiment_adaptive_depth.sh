@@ -16,11 +16,12 @@ if [[ ! -d "$SCRATCH_ROOT" ]]; then
   exit 1
 fi
 
-REPO_EXPERIMENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)/experiments/experiment_2_adaptive_depth"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_EXPERIMENT_ROOT="$REPO_ROOT/experiments/experiment_2_adaptive_depth"
 SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiments/experiment_2_adaptive_depth"
 
-LOG_BASE="$SCRATCH_EXPERIMENT_ROOT/logs"
-MODEL_BASE="$SCRATCH_EXPERIMENT_ROOT/models"
+LOG_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment_2"
+MODEL_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/Experiment_2"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
 
 if [[ ! -f "$SBATCH_SCRIPT" ]]; then
@@ -39,7 +40,6 @@ SCALES=(
   0.60
   0.70
   0.80
-  0.90
 )
 
 declare -A DEPTH_FOR_SCALE=(
@@ -50,7 +50,6 @@ declare -A DEPTH_FOR_SCALE=(
   [0.60]=4
   [0.70]=5
   [0.80]=6
-  [0.90]=7
 )
 
 declare -A BATCH_SIZE_FOR_SCALE=(
@@ -61,7 +60,6 @@ declare -A BATCH_SIZE_FOR_SCALE=(
   [0.60]=3
   [0.70]=2
   [0.80]=1
-  [0.90]=1
 )
 
 echo "Submitting Experiment 2 runs (adaptive depth per scale)"

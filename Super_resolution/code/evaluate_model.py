@@ -17,7 +17,7 @@ import tensorflow as tf
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "logs" / "eval_reports"
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "experiments" / "experiment_1_constant_depth_3" / "Evalulation"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
