@@ -49,7 +49,7 @@ declare -A DEPTH_FOR_SCALE=(
   [0.50]=3
   [0.60]=4
   [0.70]=5
-  [0.80]=6
+  [0.80]=5
 )
 
 declare -A BATCH_SIZE_FOR_SCALE=(

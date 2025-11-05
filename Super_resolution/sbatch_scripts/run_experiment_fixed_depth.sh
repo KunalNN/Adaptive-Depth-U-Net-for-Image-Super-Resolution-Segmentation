@@ -20,7 +20,7 @@ REPO_EXPERIMENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)/experiments/experiment_1_con
 SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiments/experiment_1_constant_depth_3"
 
 LOG_BASE="$SCRATCH_EXPERIMENT_ROOT/logs"
-MODEL_BASE="$SCRATCH_EXPERIMENT_ROOT/models"
+MODEL_BASE="$(cd "$SCRIPT_DIR/.." && pwd)/models/Experiment_1"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
 
 if [[ ! -f "$SBATCH_SCRIPT" ]]; then
@@ -34,10 +34,11 @@ mkdir -p "$LOG_BASE" "$MODEL_BASE" "$META_BASE"
 SCALES=(
   0.20
   0.30
-  0.40
-  0.50
-  0.60
-  0.70
+  # 0.40
+  # 0.50
+  # 0.60
+  # 0.70
+  0.80
   0.90
 )
 
@@ -45,10 +46,11 @@ SCALES=(
 declare -A BATCH_SIZE_FOR_SCALE=(
   [0.20]=8
   [0.30]=8
-  [0.40]=8
-  [0.50]=6
-  [0.60]=4
-  [0.70]=2
+  # [0.40]=8
+  # [0.50]=6
+  # [0.60]=4
+  # [0.70]=2
+  [0.80]=1
   [0.90]=1
 )
 
