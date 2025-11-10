@@ -229,6 +229,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit_val", type=int, default=None, help="Optional limit on number of validation samples.")
     parser.add_argument("--augment", action="store_true", help="Enable simple geometric augmentations.")
     parser.add_argument("--mixed_precision", action="store_true", help="Use mixed precision policy if GPUs support it.")
+    parser.add_argument("--fit_verbose", type=int, choices=[0, 1, 2], default=2, help="Keras verbosity mode (0=silent, 1=progress bar, 2=per-epoch).")
     return parser.parse_args()
 
 
@@ -285,6 +286,7 @@ def train(args: argparse.Namespace) -> None:
         validation_data=val_ds,
         epochs=args.epochs,
         callbacks=callbacks,
+        verbose=args.fit_verbose,
     )
 
     final_path = args.model_dir / f"{args.run_name}_final.keras"
