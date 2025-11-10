@@ -22,6 +22,8 @@ SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiments/experiment_2_adaptive_depth"
 
 LOG_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment_2"
 MODEL_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/Experiment_2"
+EVAL_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment2/evaluation"
+SUMMARY_ARCHIVE_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment_2"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
 
 if [[ ! -f "$SBATCH_SCRIPT" ]]; then
@@ -79,6 +81,8 @@ for scale in "${SCALES[@]}"; do
   export MODEL_DIR="$model_dir"
   export RUN_NAME="$run_name"
   export EXTRA_ARGS="--depth_override ${depth} --max_depth ${depth}"
+  export EVAL_OUTPUT_DIR="$EVAL_BASE"
+  export SUMMARY_ARCHIVE_DIR="$SUMMARY_ARCHIVE_BASE"
 
   {
     echo "scale=${scale}"

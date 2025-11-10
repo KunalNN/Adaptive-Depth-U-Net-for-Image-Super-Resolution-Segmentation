@@ -72,14 +72,17 @@ SCALE="${SCALE:-0.5}"
 PATCH_SIZE="${PATCH_SIZE:-256}"
 PATCHES_PER_IMAGE="${PATCHES_PER_IMAGE:-6}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
-EPOCHS="${EPOCHS:-150}"
-PATIENCE="${PATIENCE:-8}"
+EPOCHS="${EPOCHS:-30}"
+PATIENCE="${PATIENCE:-3}"
 VAL_SPLIT="${VAL_SPLIT:-0.05}"
 TEST_SPLIT="${TEST_SPLIT:-0.05}"
 SEED="${SEED:-1234}"
 MIXED_PRECISION="${MIXED_PRECISION:-1}"
 RUN_NAME="${RUN_NAME:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+EVAL_OUTPUT_DIR="${EVAL_OUTPUT_DIR:-$SR_DIR/logs/experiment1/evaluation}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-$BATCH_SIZE}"
+SUMMARY_ARCHIVE_DIR="${SUMMARY_ARCHIVE_DIR:-$SR_DIR/logs/experiment_1}"
 
 mkdir -p "$MODEL_DIR" "$LOG_DIR"
 
@@ -158,12 +161,66 @@ if [[ -n "$RUN_NAME" ]]; then
   CMD+=(--run_name "$RUN_NAME")
 fi
 
+if [[ -n "${RESUME_FROM:-}" ]]; then
+  CMD+=(--resume_from "$RESUME_FROM")
+fi
+
+if [[ -n "${INITIAL_EPOCH:-}" ]]; then
+  CMD+=(--initial_epoch "$INITIAL_EPOCH")
+fi
+
 if [[ -n "$EXTRA_ARGS" ]]; then
   # shellcheck disable=SC2206
   CMD+=($EXTRA_ARGS)
 fi
 
+DEPTH_OVERRIDE_VALUE=""
+if [[ "${EXTRA_ARGS:-}" =~ --depth_override[[:space:]]*([0-9]+) ]]; then
+  DEPTH_OVERRIDE_VALUE="${BASH_REMATCH[1]}"
+elif [[ "${EXTRA_ARGS:-}" =~ --depth_override=([0-9]+) ]]; then
+  DEPTH_OVERRIDE_VALUE="${BASH_REMATCH[1]}"
+fi
+DEPTH_OVERRIDE_ARG=()
+if [[ -n "$DEPTH_OVERRIDE_VALUE" ]]; then
+  DEPTH_OVERRIDE_ARG=(--depth-override "$DEPTH_OVERRIDE_VALUE")
+fi
+
 echo "[simple-run] ${CMD[*]}"
 "${CMD[@]}" 2>&1 | tee "$RUN_LOG"
+
+if [[ -n "$SUMMARY_ARCHIVE_DIR" ]]; then
+  mkdir -p "$SUMMARY_ARCHIVE_DIR"
+  summary_path="$(ls -t "$LOG_DIR"/*/model_summary.txt 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$summary_path" ]]; then
+    summary_basename="$(basename "$(dirname "$summary_path")")_model_summary.txt"
+    cp "$summary_path" "$SUMMARY_ARCHIVE_DIR/$summary_basename"
+  else
+    echo "[warn] No model_summary.txt found under $LOG_DIR to archive." >&2
+  fi
+fi
+
+mkdir -p "$EVAL_OUTPUT_DIR"
+checkpoint_path="$(ls -t "$MODEL_DIR"/unet_adaptive_scale_new_loss*.keras 2>/dev/null | head -n 1 || true)"
+if [[ -z "$checkpoint_path" ]]; then
+  echo "[warn] No checkpoint found in $MODEL_DIR after training; skipping evaluation." >&2
+else
+  checkpoint_base="$(basename "$checkpoint_path" .keras)"
+  eval_run_name="${RUN_NAME:-$checkpoint_base}_eval"
+  eval_log="${RUN_LOG}.eval"
+  EVAL_CMD=(
+    "$PYTHON_BIN" -u "$SR_DIR/code/evaluate_model.py"
+    --model-path "$checkpoint_path"
+    --scale "$SCALE"
+    --patch-size "$PATCH_SIZE"
+    --batch-size "$EVAL_BATCH_SIZE"
+    --output-dir "$EVAL_OUTPUT_DIR"
+    --run-name "$eval_run_name"
+  )
+  if [[ ${#DEPTH_OVERRIDE_ARG[@]} -gt 0 ]]; then
+    EVAL_CMD+=("${DEPTH_OVERRIDE_ARG[@]}")
+  fi
+  echo "[simple-eval] ${EVAL_CMD[*]}"
+  "${EVAL_CMD[@]}" 2>&1 | tee "$eval_log"
+fi
 
 echo "Finished at: $(date)"

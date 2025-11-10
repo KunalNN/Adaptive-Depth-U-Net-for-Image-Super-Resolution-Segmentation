@@ -50,6 +50,9 @@ DEFAULT_HR_SIZE = 256
 DEFAULT_BASE_CHANNELS = 64
 DEFAULT_RESIDUAL_HEAD_CHANNELS = 64
 
+# --- constants ---
+DATA_LR_SHRINK = 0.5  # To ensure that the low-resolution (LR) input remains consistent across all scales.
+
 
 # --------------------------------------------------------------------------- #
 # Local data utilities (decoupled from shared/pipeline)
@@ -389,6 +392,11 @@ def train(args: argparse.Namespace) -> None:
     if args.max_depth < 1:
         raise ValueError("max_depth must be at least 1.")
 
+    if args.initial_epoch < 0:
+        raise ValueError("initial_epoch must be non-negative.")
+    if args.initial_epoch >= args.epochs:
+        raise ValueError("initial_epoch must be smaller than --epochs to resume training.")
+
     high_res_dir_input = args.high_res_dir or DEFAULT_HIGH_RES_DIR
     high_res_dir = Path(high_res_dir_input).expanduser()
     if not high_res_dir.exists():
@@ -421,7 +429,7 @@ def train(args: argparse.Namespace) -> None:
         train_paths,
         patch_size=patch_size,
         patches_per_image=args.patches_per_image,
-        scale=args.scale,
+        scale= DATA_LR_SHRINK,
         batch_size=args.batch_size,
         seed=args.seed,
         shuffle_buffer=args.shuffle_buffer,
@@ -433,7 +441,7 @@ def train(args: argparse.Namespace) -> None:
         val_fit_ds, val_patch_count, _ = make_eval_patch_dataset(
             val_paths,
             patch_size=patch_size,
-            scale=args.scale,
+            scale=DATA_LR_SHRINK,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -444,7 +452,7 @@ def train(args: argparse.Namespace) -> None:
         _, test_patch_count, _ = make_eval_patch_dataset(
             test_paths,
             patch_size=patch_size,
-            scale=args.scale,
+            scale=DATA_LR_SHRINK,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -478,6 +486,34 @@ def train(args: argparse.Namespace) -> None:
         metrics=metrics,
         jit_compile=False,  # avoid XLA forcing unsupported resize ops on the cluster
     )
+
+    resume_checkpoint: Path | None = None
+    if args.resume_from:
+        candidate = Path(args.resume_from).expanduser()
+        if candidate.is_dir():
+            ckpts = sorted(candidate.glob("*.keras"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if not ckpts:
+                raise FileNotFoundError(
+                    f"--resume_from directory {candidate} contains no '.keras' checkpoints."
+                )
+            resume_checkpoint = ckpts[0]
+        else:
+            if not candidate.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {candidate}")
+            resume_checkpoint = candidate
+
+    if resume_checkpoint is not None:
+        print(f"[info] Loading weights from {resume_checkpoint}")
+        try:
+            model.load_weights(str(resume_checkpoint))
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Failed to load checkpoint from {resume_checkpoint}") from exc
+        if args.initial_epoch == 0:
+            print("[warn] --resume_from supplied without --initial_epoch; training will restart from epoch 0.")
+    elif args.initial_epoch > 0:
+        print(
+            "[warn] --initial_epoch was set without --resume_from; training will skip the initial epochs but start from random weights."
+        )
 
     summary_lines: List[str] = []
     model.summary(print_fn=summary_lines.append)
@@ -535,7 +571,7 @@ def train(args: argparse.Namespace) -> None:
         tf.summary.scalar("dataset/images/val", len(val_paths), step=0)
         tf.summary.scalar("dataset/images/test", len(test_paths), step=0)
         tf.summary.scalar("dataset/patches_per_epoch/train", train_patch_count, step=0)
-        tf.summary.scalar("dataset/patches/val", val_patch_count, step=0)
+        tf.summary.scalar("dataset/patches/val", val_patch_count, step=0) 
         tf.summary.scalar("dataset/patches/test", test_patch_count, step=0)
         if preview_count > 0 and train_paths:
             rng = np.random.default_rng(args.seed)
@@ -543,7 +579,7 @@ def train(args: argparse.Namespace) -> None:
             preview_hr_image = load_rgb_image_full(preview_hr_path)
             hr_preview_np = random_patches(preview_hr_image, patch_size, count=preview_count, rng=rng)
             lr_preview_np = np.stack(
-                [degrade_image(patch, args.scale, patch_size) for patch in hr_preview_np],
+                [degrade_image(patch, DATA_LR_SHRINK, patch_size) for patch in hr_preview_np],
                 axis=0,
             )
             hr_preview = tf.convert_to_tensor(hr_preview_np)
@@ -580,10 +616,11 @@ def train(args: argparse.Namespace) -> None:
     history = model.fit(
         train_ds,
         epochs=args.epochs,
+        initial_epoch=args.initial_epoch,
         steps_per_epoch=steps_per_epoch,
         validation_data=val_fit_ds if val_fit_ds is not None else None,
         validation_steps=val_steps if val_fit_ds is not None else None,
-        validation_freq=4,
+        validation_freq=1,
         callbacks=callbacks,
         verbose=2,
     )
@@ -597,7 +634,7 @@ def train(args: argparse.Namespace) -> None:
         val_eval_ds, _, _ = make_eval_patch_dataset(
             val_paths,
             patch_size=patch_size,
-            scale=args.scale,
+            scale= DATA_LR_SHRINK,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -606,7 +643,7 @@ def train(args: argparse.Namespace) -> None:
         test_eval_ds, _, _ = make_eval_patch_dataset(
             test_paths,
             patch_size=patch_size,
-            scale=args.scale,
+            scale=DATA_LR_SHRINK,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -745,6 +782,18 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Ignored in patch mode; low-resolution patches are synthesised on the fly.",
+    )
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Optional path to a .keras checkpoint (or directory containing checkpoints) to resume from.",
+    )
+    parser.add_argument(
+        "--initial_epoch",
+        type=int,
+        default=0,
+        help="Epoch index to begin training from when resuming (must be < --epochs).",
     )
     return parser.parse_args()
 

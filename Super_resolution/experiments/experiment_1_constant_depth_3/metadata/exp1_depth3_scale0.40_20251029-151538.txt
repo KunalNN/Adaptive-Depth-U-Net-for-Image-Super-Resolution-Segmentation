@@ -1,7 +1,0 @@
-scale=0.40
-batch_size=8
-depth=3
-run_name=exp1_depth3_scale0.40
-log_dir=/scratch/knarwani/Final_data/Super_resolution/experiments/experiment_1_constant_depth_3/logs/exp1_depth3_scale0.40_20251029-151538
-model_dir=/scratch/knarwani/Final_data/Super_resolution/experiments/experiment_1_constant_depth_3/models/exp1_depth3_scale0.40_20251029-151538
-submitted=2025-10-29T15:15:38+01:00
