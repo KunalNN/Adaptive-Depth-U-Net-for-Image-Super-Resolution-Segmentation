@@ -1,9 +1,9 @@
 """
-Adaptive-depth U-Net training script for image segmentation.
+Adaptive-depth U-Net training script for ISIC-2017 lesion segmentation.
 
-This variant targets the Cityscapes-style dataset layout (leftImg8bit/gtFine)
-stored on the cluster scratch volume. It remains configurable so paths and
-options can be overridden at submission time.
+The defaults follow the shared dataset path declarations so that a typical
+cluster deployment pointing at /scratch/.../Segmenation/ISIC-2017 works
+out-of-the-box, while still allowing overrides through CLI arguments.
 """
 
 import argparse
@@ -20,21 +20,21 @@ from tensorflow.keras.optimizers import Adam
 sys.path.append(str(Path(__file__).resolve().parents[2])) # because Shared is two levels up
 
 from shared.pipeline import sorted_alphanumeric
+from dataset_paths import (
+    TRAIN_IMAGE_DIR,
+    TRAIN_MASK_DIR,
+    VALID_IMAGE_DIR,
+    VALID_MASK_DIR,
+    MODEL_ROOT,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-# Default Cityscapes-style dataset locations on the cluster scratch volume.
-DATA_ROOT = Path("/scratch/knarwani/Final_data/Segmenation")
-LEFTIMG_ROOT = DATA_ROOT / "leftImg8bit_trainvaltest" / "leftImg8bit"
-GTFINE_ROOT = DATA_ROOT / "gtFine_trainvaltest" / "gtFine"
-
-DEFAULT_TRAIN_IMAGE_DIR = LEFTIMG_ROOT / "train"
-DEFAULT_TRAIN_MASK_DIR = GTFINE_ROOT / "train"
-DEFAULT_VAL_IMAGE_DIR = LEFTIMG_ROOT / "val"
-DEFAULT_VAL_MASK_DIR = GTFINE_ROOT / "val"
-DEFAULT_TEST_IMAGE_DIR = LEFTIMG_ROOT / "test"
-DEFAULT_TEST_MASK_DIR = GTFINE_ROOT / "test"
-DEFAULT_MODEL_DIR = PROJECT_ROOT / "Segmenation" / "models"
+DEFAULT_TRAIN_IMAGE_DIR = TRAIN_IMAGE_DIR
+DEFAULT_TRAIN_MASK_DIR = TRAIN_MASK_DIR
+DEFAULT_VAL_IMAGE_DIR = VALID_IMAGE_DIR
+DEFAULT_VAL_MASK_DIR = VALID_MASK_DIR
+DEFAULT_MODEL_DIR = MODEL_ROOT
+DEFAULT_IMAGE_SUFFIX = ".jpg"
+DEFAULT_MASK_SUFFIX = "_segmentation.png"
 
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -209,13 +209,13 @@ def build_dataset(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a baseline U-Net on the Cityscapes dataset.")
+    parser = argparse.ArgumentParser(description="Train a baseline U-Net on the ISIC-2017 dataset.")
     parser.add_argument("--train_image_dir", type=Path, default=DEFAULT_TRAIN_IMAGE_DIR, help="Directory of training images.")
     parser.add_argument("--train_mask_dir", type=Path, default=DEFAULT_TRAIN_MASK_DIR, help="Directory of training segmentation masks.")
     parser.add_argument("--val_image_dir", type=Path, default=DEFAULT_VAL_IMAGE_DIR, help="Directory of validation images.")
     parser.add_argument("--val_mask_dir", type=Path, default=DEFAULT_VAL_MASK_DIR, help="Directory of validation masks.")
-    parser.add_argument("--image_suffix", type=str, default="_leftImg8bit.png", help="Suffix/pattern for image files.")
-    parser.add_argument("--mask_suffix", type=str, default="_gtFine_labelIds.png", help="Suffix/pattern for mask files.")
+    parser.add_argument("--image_suffix", type=str, default=DEFAULT_IMAGE_SUFFIX, help="Suffix/pattern for image files.")
+    parser.add_argument("--mask_suffix", type=str, default=DEFAULT_MASK_SUFFIX, help="Suffix/pattern for mask files.")
     parser.add_argument("--image_size", type=int, default=256, help="Square input resolution.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size.")
     parser.add_argument("--epochs", type=int, default=60, help="Number of training epochs.")
@@ -223,7 +223,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base_channels", type=int, default=32, help="Number of filters in the first encoder block.")
     parser.add_argument("--depth", type=int, default=4, help="Depth of the encoder/decoder.")
     parser.add_argument("--model_dir", type=Path, default=DEFAULT_MODEL_DIR, help="Directory to save checkpoints.")
-    parser.add_argument("--run_name", type=str, default="unet_cityscapes", help="Prefix for saved checkpoints.")
+    parser.add_argument("--run_name", type=str, default="unet_isic", help="Prefix for saved checkpoints.")
     parser.add_argument("--seed", type=int, default=13, help="Random seed for shuffling.")
     parser.add_argument("--limit_train", type=int, default=None, help="Optional limit on number of training samples.")
     parser.add_argument("--limit_val", type=int, default=None, help="Optional limit on number of validation samples.")

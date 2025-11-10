@@ -60,10 +60,11 @@ def load_checkpoint_model(
     patch_size: int,
     depth_override: int | None,
 ) -> tf.keras.Model:
-    from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch  # noqa: E402
+    from shared.custom_layers import ClippedResidualAdd, ResizeByScale, ResizeToMatch  # noqa: E402
 
     custom_objects = {
-        "ClipAdd": ClipAdd,
+        "ClippedResidualAdd": ClippedResidualAdd,
+        "ClipAdd": ClippedResidualAdd,  # legacy checkpoints
         "ResizeByScale": ResizeByScale,
         "ResizeToMatch": ResizeToMatch,
     }

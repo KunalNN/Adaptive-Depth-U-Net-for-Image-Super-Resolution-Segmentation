@@ -25,7 +25,13 @@ from tensorflow.keras import layers as L
 from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint
 
 from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, LOG_ROOT, MODEL_ROOT
-from shared.custom_layers import ClipAdd, ResizeByScale, ResizeToMatch, estimate_bottleneck_size, custom_depth_from_scale
+from shared.custom_layers import (
+    ClippedResidualAdd,
+    ResizeByScale,
+    ResizeToMatch,
+    estimate_bottleneck_size,
+    custom_depth_from_scale,
+)
 from shared.pipeline import (
     load_rgb_image_full,
     make_eval_patch_dataset,
@@ -266,8 +272,8 @@ def build_super_resolution_unet(
         bias_initializer="zeros",
         name="residual_rgb",
     )(x_head)
-    # ClipAdd merges residual with the input while clamping to image range.
-    outputs = ClipAdd(name="enhanced_rgb")([inputs, residual])
+    # ClippedResidualAdd merges residual with the input while clamping to image range.
+    outputs = ClippedResidualAdd(name="enhanced_rgb")([inputs, residual])
 
     # Return the assembled model plus diagnostics for logging/reporting.
     model = Model(inputs, outputs, name=f"U-Net_SR_scale{scale:.2f}_depth{depth}")

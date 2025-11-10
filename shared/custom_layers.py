@@ -132,8 +132,11 @@ class ResizeToMatch(L.Layer):
         }
 
 @register_keras_serializable(package="utils")
-class ClipAdd(L.Layer):
+class ClippedResidualAdd(L.Layer):
     def call(self, inputs: Tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
         inp, residual = inputs
         out = tf.cast(inp, tf.float32) + tf.cast(residual, tf.float32)
         return tf.cast(tf.clip_by_value(out, 0.0, 1.0), inp.dtype)
+
+# Backward compatibility alias for legacy checkpoints and configs.
+ClipAdd = ClippedResidualAdd

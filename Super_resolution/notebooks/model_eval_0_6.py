@@ -150,7 +150,7 @@ class ResizeToMatch(L.Layer):
 
 
 @register_keras_serializable(package="utils")
-class ClipAdd(L.Layer):
+class ClippedResidualAdd(L.Layer):
     def call(self, inputs):
         inp, residual = inputs
         y = tf.cast(inp, tf.float32) + tf.cast(residual, tf.float32)
@@ -175,7 +175,9 @@ def load_model(model_path: Path) -> tf.keras.Model:
     custom_objects = {
         "ResizeByScale": ResizeByScale,
         "ResizeToMatch": ResizeToMatch,
-        "ClipAdd": ClipAdd,
+        "ClippedResidualAdd": ClippedResidualAdd,
+        # Keep legacy key for older checkpoints exported before the rename.
+        "ClipAdd": ClippedResidualAdd,
     }
     model = tf.keras.models.load_model(
         model_path,

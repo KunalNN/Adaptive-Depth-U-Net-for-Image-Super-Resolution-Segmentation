@@ -1,7 +1,7 @@
 """Common utilities shared across training scripts."""
 
 from .custom_layers import (
-    ClipAdd,
+    ClippedResidualAdd,
     ResizeByScale,
     ResizeToMatch,
     estimate_bottleneck_size,
@@ -17,7 +17,7 @@ from .pipeline import (
 )
 
 __all__ = [
-    "ClipAdd",
+    "ClippedResidualAdd",
     "ResizeByScale",
     "ResizeToMatch",
     "estimate_bottleneck_size",
