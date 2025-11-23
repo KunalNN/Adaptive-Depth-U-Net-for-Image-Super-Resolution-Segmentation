@@ -8,16 +8,17 @@
 #SBATCH --mem=31G
 #SBATCH --time=12:00:00
 #SBATCH -J unet-seg-train
-#SBATCH --output=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Segmenation/logs/slurm-%x-%j.out
-#SBATCH --error=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Segmenation/logs/slurm-%x-%j.out
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.out
 
 set -euo pipefail
 
-REPO_DIR="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 SEG_DIR="$REPO_DIR/Segmenation"
-PY_SCRIPT="$SEG_DIR/code/train_adaptive_unet.py"
-PYTHON_BIN="$REPO_DIR/Super_resolution/.venv/bin/python"
-VENV_ACTIVATE="$REPO_DIR/Super_resolution/.venv/bin/activate"
+PY_SCRIPT="${PY_SCRIPT:-$SEG_DIR/code/train_adaptive_unet.py}"
+PYTHON_BIN="${PYTHON_BIN:-$REPO_DIR/Super_resolution/.venv/bin/python}"
+VENV_ACTIVATE="${VENV_ACTIVATE:-$REPO_DIR/Super_resolution/.venv/bin/activate}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "[error] Python interpreter not found at $PYTHON_BIN" >&2
@@ -96,23 +97,12 @@ for dir_path in "$TRAIN_IMAGE_DIR" "$TRAIN_MASK_DIR" "$VAL_IMAGE_DIR" "$VAL_MASK
   fi
 done
 
-IMAGE_SIZE="${IMAGE_SIZE:-256}"
 BATCH_SIZE="${BATCH_SIZE:-0}"
 EPOCHS="${EPOCHS:-0}"
 BASE_CHANNELS="${BASE_CHANNELS:-64}"
 DEPTH="${DEPTH:-4}"
 PROTOCOL="${PROTOCOL:-A}"
-SEED="${SEED:-42}"
-PATIENCE="${PATIENCE:-}"
 RUN_NAME="${RUN_NAME:-}"
-MIXED_PRECISION="${MIXED_PRECISION:-1}"
-PAIRS_MANIFEST="${PAIRS_MANIFEST:-$SEG_DIR/manifests/isic2017_train_val_pairs.json}"
-REFRESH_PAIRS_MANIFEST="${REFRESH_PAIRS_MANIFEST:-0}"
-EXTRA_ARGS="${EXTRA_ARGS:-}"
-
-if [[ -n "$PAIRS_MANIFEST" ]]; then
-  mkdir -p "$(dirname "$PAIRS_MANIFEST")"
-fi
 
 PIP_CUDA_PATHS="$("$PYTHON_BIN" - <<'PY'
 import os, site
@@ -156,47 +146,21 @@ run_tag="${RUN_NAME:-unet}"
 run_tag="${run_tag// /_}"
 RUN_LOG="$LOG_DIR/train-${run_tag}-${ts}.log"
 
-echo "[seg-config] protocol=$PROTOCOL images=$TRAIN_IMAGE_DIR masks=$TRAIN_MASK_DIR model_dir=$MODEL_DIR log_dir=$LOG_DIR manifest=$PAIRS_MANIFEST"
+echo "[seg-config] protocol=$PROTOCOL images=$TRAIN_IMAGE_DIR masks=$TRAIN_MASK_DIR model_dir=$MODEL_DIR log_dir=$LOG_DIR"
 
 CMD=(
   "$PYTHON_BIN" -u "$PY_SCRIPT"
   --protocol "$PROTOCOL"
-  --train_images "$TRAIN_IMAGE_DIR"
-  --train_masks "$TRAIN_MASK_DIR"
-  --val_images "$VAL_IMAGE_DIR"
-  --val_masks "$VAL_MASK_DIR"
-  --image_size "$IMAGE_SIZE"
   --batch_size "$BATCH_SIZE"
   --epochs "$EPOCHS"
   --base_channels "$BASE_CHANNELS"
   --depth "$DEPTH"
   --model_dir "$MODEL_DIR"
   --log_dir "$LOG_DIR"
-  --seed "$SEED"
 )
 
 if [[ -n "$RUN_NAME" ]]; then
   CMD+=(--run_name "$RUN_NAME")
-fi
-
-if [[ -n "$PATIENCE" ]]; then
-  CMD+=(--patience "$PATIENCE")
-fi
-
-if [[ "$MIXED_PRECISION" != "0" ]]; then
-  CMD+=(--mixed_precision)
-fi
-
-if [[ -n "$PAIRS_MANIFEST" ]]; then
-  CMD+=(--pairs_manifest "$PAIRS_MANIFEST")
-  if [[ "$REFRESH_PAIRS_MANIFEST" != "0" ]]; then
-    CMD+=(--refresh_pairs_manifest)
-  fi
-fi
-
-if [[ -n "$EXTRA_ARGS" ]]; then
-  # shellcheck disable=SC2206
-  CMD+=($EXTRA_ARGS)
 fi
 
 echo "[seg-run] ${CMD[*]}"

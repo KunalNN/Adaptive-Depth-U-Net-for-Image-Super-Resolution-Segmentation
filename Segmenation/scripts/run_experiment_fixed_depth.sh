@@ -89,6 +89,8 @@ for scale in "${SCALES[@]}"; do
     echo "scale=${scale}"
     echo "batch_size=${batch_size}"
     echo "depth=4"
+    echo "weight_decay=1e-4"
+    echo "patience_strategy=protocol_default_plus5_if_batch_size_le_2"
     echo "run_name=${run_name}"
     echo "log_dir=${log_dir}"
     echo "model_dir=${model_dir}"

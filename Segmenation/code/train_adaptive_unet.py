@@ -59,6 +59,9 @@ DEFAULT_BASE_CHANNELS = 64
 DEFAULT_DEPTH = 4
 DEFAULT_SEED = 42
 DEFAULT_THRESHOLD = 0.5
+DEFAULT_DROPOUT_RATE = 0.1
+DEFAULT_WEIGHT_DECAY = 1e-4
+PATIENCE_BONUS_FOR_SMALL_BATCH = 5
 
 
 def set_global_seed(seed: int) -> None:
@@ -399,6 +402,7 @@ def build_adaptive_depth_unet(
     input_size: int,
     base_channels: int,
     depth: int,
+    dropout_rate: float = 0.0,
 ) -> Model:
     inputs = Input(shape=(input_size, input_size, 3), name="isic_image")
 
@@ -415,10 +419,14 @@ def build_adaptive_depth_unet(
         filters *= 2
 
     x = conv_block(x, filters)
+    if dropout_rate > 0:
+        x = L.SpatialDropout2D(dropout_rate)(x)
 
     for filters, skip in reversed(list(zip(channel_progression, skips))):
         x = L.UpSampling2D(size=(2, 2), interpolation="bilinear")(x)
         x = L.Concatenate()([x, skip])
+        if dropout_rate > 0:
+            x = L.SpatialDropout2D(dropout_rate)(x)
         x = conv_block(x, filters)
 
     outputs = L.Conv2D(1, 1, activation="sigmoid", name="lesion_mask")(x)
@@ -511,7 +519,7 @@ def prepare_callbacks(
     return callbacks
 
 
-def build_optimizer(protocol: ProtocolConfig, steps_per_epoch: int, epochs: int) -> tf.keras.optimizers.Optimizer:
+def build_optimizer(protocol: ProtocolConfig, steps_per_epoch: int, epochs: int, weight_decay: float) -> tf.keras.optimizers.Optimizer:
     if protocol.cosine_schedule:
         decay_steps = epochs * max(steps_per_epoch, 1)
         schedule = CosineDecay(
@@ -519,60 +527,28 @@ def build_optimizer(protocol: ProtocolConfig, steps_per_epoch: int, epochs: int)
             decay_steps=decay_steps,
             alpha=0.0,
         )
-        return tf.keras.optimizers.Adam(learning_rate=schedule)
-    return tf.keras.optimizers.Adam(learning_rate=protocol.initial_lr)
+        return tf.keras.optimizers.AdamW(learning_rate=schedule, weight_decay=weight_decay)
+    return tf.keras.optimizers.AdamW(learning_rate=protocol.initial_lr, weight_decay=weight_decay)
 
 
 def train(args: argparse.Namespace) -> None:
-    set_global_seed(args.seed)
+    set_global_seed(DEFAULT_SEED)
 
     protocol = PROTOCOLS[args.protocol]
     epochs = args.epochs or protocol.epochs
     batch_size = args.batch_size or protocol.batch_size
-    image_size = args.image_size
+    image_size = DEFAULT_IMAGE_SIZE
 
-    if args.mixed_precision:
-        available_gpus = tf.config.list_physical_devices("GPU")
-        if not available_gpus:
-            print("[warn] Mixed precision requested but no GPU detected; running in float32.")
-        else:
-            mixed_precision.set_global_policy("mixed_float16")
-
-    if args.refresh_pairs_manifest and not args.pairs_manifest:
-        raise ValueError("--refresh_pairs_manifest requires --pairs_manifest")
-
-    train_images = Path(args.train_images or TRAIN_IMAGE_DIR).expanduser()
-    train_masks = Path(args.train_masks or TRAIN_MASK_DIR).expanduser()
-    val_images = Path(args.val_images or VALID_IMAGE_DIR).expanduser()
-    val_masks = Path(args.val_masks or VALID_MASK_DIR).expanduser()
-    test_images = Path(args.test_images or TEST_IMAGE_DIR).expanduser()
-    test_masks = Path(args.test_masks or TEST_MASK_DIR).expanduser()
+    train_images = Path(TRAIN_IMAGE_DIR).expanduser()
+    train_masks = Path(TRAIN_MASK_DIR).expanduser()
+    val_images = Path(VALID_IMAGE_DIR).expanduser()
+    val_masks = Path(VALID_MASK_DIR).expanduser()
+    test_images = Path(TEST_IMAGE_DIR).expanduser()
+    test_masks = Path(TEST_MASK_DIR).expanduser()
 
     manifest_path: Optional[Path] = None
     train_pairs: Optional[List[Tuple[str, str]]] = None
     val_pairs: Optional[List[Tuple[str, str]]] = None
-    if args.pairs_manifest:
-        manifest_path = Path(args.pairs_manifest).expanduser()
-        if manifest_path.exists() and not args.refresh_pairs_manifest:
-            print(f"[data] Loading dataset manifest from {manifest_path}")
-            train_pairs, val_pairs = load_pairs_manifest(manifest_path)
-            print(f"[data] Manifest contains {len(train_pairs)} train / {len(val_pairs)} val pairs")
-        else:
-            if manifest_path.exists():
-                print(f"[data] Refreshing dataset manifest at {manifest_path}")
-            else:
-                print(f"[data] Creating dataset manifest at {manifest_path}")
-            train_pairs = collect_isic_pairs(train_images, train_masks)
-            val_pairs = collect_isic_pairs(val_images, val_masks)
-            print(f"[data] Collected {len(train_pairs)} train / {len(val_pairs)} val pairs")
-            metadata = {
-                "train_images": str(train_images),
-                "train_masks": str(train_masks),
-                "val_images": str(val_images),
-                "val_masks": str(val_masks),
-                "seed": args.seed,
-            }
-            write_pairs_manifest(manifest_path, train_pairs, val_pairs, metadata=metadata)
 
     train_ds, val_ds, train_count, val_count = prepare_isic_train_val_datasets(
         train_image_dir=train_images,
@@ -582,7 +558,7 @@ def train(args: argparse.Namespace) -> None:
         image_size=image_size,
         train_batch_size=batch_size,
         val_batch_size=batch_size,
-        seed=args.seed,
+        seed=DEFAULT_SEED,
         train_pairs=train_pairs,
         val_pairs=val_pairs,
     )
@@ -601,7 +577,7 @@ def train(args: argparse.Namespace) -> None:
             image_size=image_size,
             augment=False,
             shuffle=False,
-            seed=args.seed,
+            seed=DEFAULT_SEED,
         )
         test_steps = math.ceil(test_count / batch_size)
         print(f"[data] Test split contains {test_count} samples")
@@ -612,11 +588,12 @@ def train(args: argparse.Namespace) -> None:
         input_size=image_size,
         base_channels=args.base_channels,
         depth=args.depth,
+        dropout_rate=DEFAULT_DROPOUT_RATE,
     )
 
     loss_fn = protocol.loss_builder()
     metrics = [dice_metric, iou_metric]
-    optimizer = build_optimizer(protocol, steps_per_epoch, epochs)
+    optimizer = build_optimizer(protocol, steps_per_epoch, epochs, DEFAULT_WEIGHT_DECAY)
 
     model.compile(
         optimizer=optimizer,
@@ -627,9 +604,7 @@ def train(args: argparse.Namespace) -> None:
 
     summary_lines: List[str] = []
     model.summary(print_fn=summary_lines.append)
-    if args.print_model_summary:
-        for line in summary_lines:
-            print(line)
+    # Model summary is always written to disk; stdout summary is disabled to keep logs concise.
 
     model_dir = Path(args.model_dir or MODEL_ROOT).expanduser()
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -638,16 +613,20 @@ def train(args: argparse.Namespace) -> None:
     log_root.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_name = args.run_name or f"protocol{protocol.key}_seed{args.seed}_{timestamp}"
+    run_name = args.run_name or f"protocol{protocol.key}_seed{DEFAULT_SEED}_{timestamp}"
     run_dir = log_root / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
     ckpt_path = model_dir / f"{run_name}.keras"
 
+    patience = protocol.early_stopping_patience
+    if patience is not None and batch_size <= 2:
+        patience = patience + PATIENCE_BONUS_FOR_SMALL_BATCH
+
     callbacks = prepare_callbacks(
         run_dir=run_dir,
         ckpt_path=ckpt_path,
-        patience=args.patience if args.patience is not None else protocol.early_stopping_patience,
+        patience=patience,
     )
 
     history = model.fit(
@@ -655,7 +634,7 @@ def train(args: argparse.Namespace) -> None:
         epochs=epochs,
         validation_data=val_ds,
         callbacks=callbacks,
-        verbose=args.fit_verbose,
+        verbose=2,
     )
 
     if ckpt_path.exists():
@@ -681,12 +660,15 @@ def train(args: argparse.Namespace) -> None:
         "val_steps": val_steps,
         "test_samples": test_count,
         "test_steps": test_steps,
-        "seed": args.seed,
-        "mixed_precision": bool(args.mixed_precision),
-        "fit_verbose": args.fit_verbose,
-        "print_model_summary": bool(args.print_model_summary),
+        "seed": DEFAULT_SEED,
+        "dropout_rate": DEFAULT_DROPOUT_RATE,
+        "mixed_precision": False,
+        "fit_verbose": 2,
+        "print_model_summary": False,
         "threshold": DEFAULT_THRESHOLD,
         "model_checkpoint": str(ckpt_path),
+        "weight_decay": DEFAULT_WEIGHT_DECAY,
+        "patience_used": patience,
         "train_images": str(train_images),
         "train_masks": str(train_masks),
         "val_images": str(val_images),
@@ -717,53 +699,14 @@ def train(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Adaptive-Depth U-Net on ISIC-2017 segmentation.")
-    parser.add_argument(
-        "--protocol",
-        type=str,
-        choices=sorted(PROTOCOLS.keys()),
-        default="A",
-        help="Training protocol to follow.",
-    )
+    parser.add_argument("--protocol", type=str, choices=sorted(PROTOCOLS.keys()), default="A")
     parser.add_argument("--epochs", type=int, default=0, help="Override epochs (0 keeps protocol default).")
     parser.add_argument("--batch_size", type=int, default=0, help="Override batch size (0 keeps protocol default).")
     parser.add_argument("--base_channels", type=int, default=DEFAULT_BASE_CHANNELS)
     parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
-    parser.add_argument("--image_size", type=int, default=DEFAULT_IMAGE_SIZE)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--patience", type=int, default=None, help="Override patience (None uses protocol default).")
-    parser.add_argument("--mixed_precision", action="store_true", help="Enable mixed_float16 policy.")
     parser.add_argument("--model_dir", type=str, default=str(MODEL_ROOT))
     parser.add_argument("--log_dir", type=str, default=str(LOG_ROOT))
     parser.add_argument("--run_name", type=str, default=None)
-    parser.add_argument(
-        "--print_model_summary",
-        action="store_true",
-        help="Print the full Keras model summary to stdout (default: off).",
-    )
-    parser.add_argument(
-        "--fit_verbose",
-        type=int,
-        default=2,
-        choices=(0, 1, 2),
-        help="Verbosity level for model.fit (0=silent, 1=per-batch bar, 2=per-epoch).",
-    )
-    parser.add_argument("--train_images", type=str, default=None, help="Override training image directory.")
-    parser.add_argument("--train_masks", type=str, default=None, help="Override training mask directory.")
-    parser.add_argument("--val_images", type=str, default=None, help="Override validation image directory.")
-    parser.add_argument("--val_masks", type=str, default=None, help="Override validation mask directory.")
-    parser.add_argument("--test_images", type=str, default=None, help="Override test image directory.")
-    parser.add_argument("--test_masks", type=str, default=None, help="Override test mask directory.")
-    parser.add_argument(
-        "--pairs_manifest",
-        type=str,
-        default=None,
-        help="JSON file enumerating train/val pairs so experiments share identical data.",
-    )
-    parser.add_argument(
-        "--refresh_pairs_manifest",
-        action="store_true",
-        help="Rebuild the manifest even if it already exists.",
-    )
     return parser.parse_args()
 
 
