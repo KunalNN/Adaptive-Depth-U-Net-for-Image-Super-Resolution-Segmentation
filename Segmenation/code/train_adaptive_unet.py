@@ -12,6 +12,7 @@ and D2HU-Net papers so that experiments stay comparable:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import random
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -519,6 +521,47 @@ def prepare_callbacks(
     return callbacks
 
 
+class EpochTiming(tf.keras.callbacks.Callback):
+    """Record per-epoch wall time and derived ms/step for training cost plots."""
+
+    def __init__(self, steps_per_epoch: int, log_path: Path):
+        super().__init__()
+        self.steps_per_epoch = max(steps_per_epoch, 1)
+        self.log_path = Path(log_path)
+        self._epoch_start: float | None = None
+        self.records: List[Dict[str, float]] = []
+
+    def on_train_begin(self, logs=None):
+        self.records = []
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self._epoch_start = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        if self._epoch_start is None:
+            return
+        duration_s = max(time.time() - self._epoch_start, 0.0)
+        ms_per_step = (duration_s / self.steps_per_epoch) * 1000.0
+        self.records.append(
+            {
+                "epoch": int(epoch) + 1,
+                "duration_s": duration_s,
+                "ms_per_step": ms_per_step,
+                "steps_per_epoch": self.steps_per_epoch,
+            }
+        )
+        self._epoch_start = None
+
+    def on_train_end(self, logs=None):
+        if not self.records:
+            return
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["epoch", "duration_s", "ms_per_step", "steps_per_epoch"])
+            writer.writeheader()
+            writer.writerows(self.records)
+
+
 def build_optimizer(protocol: ProtocolConfig, steps_per_epoch: int, epochs: int, weight_decay: float) -> tf.keras.optimizers.Optimizer:
     if protocol.cosine_schedule:
         decay_steps = epochs * max(steps_per_epoch, 1)
@@ -623,11 +666,14 @@ def train(args: argparse.Namespace) -> None:
     if patience is not None and batch_size <= 2:
         patience = patience + PATIENCE_BONUS_FOR_SMALL_BATCH
 
+    timing_callback = EpochTiming(steps_per_epoch=steps_per_epoch, log_path=run_dir / "epoch_times.csv")
+
     callbacks = prepare_callbacks(
         run_dir=run_dir,
         ckpt_path=ckpt_path,
         patience=patience,
     )
+    callbacks.append(timing_callback)
 
     history = model.fit(
         train_ds,
@@ -645,6 +691,8 @@ def train(args: argparse.Namespace) -> None:
     test_metrics: Optional[Dict[str, float]] = None
     if test_ds is not None:
         test_metrics = model.evaluate(test_ds, return_dict=True, verbose=1)
+
+    timing_summary = timing_callback.records[-1] if timing_callback.records else None
 
     config_payload = {
         "protocol": protocol.key,
@@ -669,6 +717,9 @@ def train(args: argparse.Namespace) -> None:
         "model_checkpoint": str(ckpt_path),
         "weight_decay": DEFAULT_WEIGHT_DECAY,
         "patience_used": patience,
+        "epoch_time_ms_per_step": timing_summary["ms_per_step"] if timing_summary else None,
+        "epoch_time_duration_s": timing_summary["duration_s"] if timing_summary else None,
+        "epoch_time_steps": timing_summary["steps_per_epoch"] if timing_summary else None,
         "train_images": str(train_images),
         "train_masks": str(train_masks),
         "val_images": str(val_images),
