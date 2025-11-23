@@ -16,8 +16,10 @@ set -euo pipefail
 REPO_DIR="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation"
 SEG_DIR="$REPO_DIR/Segmenation"
 PY_SCRIPT="$SEG_DIR/code/train_adaptive_unet.py"
+EVAL_SCRIPT="$SEG_DIR/code/evaluate_adaptive_unet.py"
 PYTHON_BIN="$REPO_DIR/Super_resolution/.venv/bin/python"
 VENV_ACTIVATE="$REPO_DIR/Super_resolution/.venv/bin/activate"
+RUN_EVAL_AFTER_TRAIN="${RUN_EVAL_AFTER_TRAIN:-1}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "[error] Python interpreter not found at $PYTHON_BIN" >&2
@@ -26,6 +28,11 @@ fi
 
 if [[ ! -f "$PY_SCRIPT" ]]; then
   echo "[error] Training entry point not found at $PY_SCRIPT" >&2
+  exit 1
+fi
+
+if [[ ! -f "$EVAL_SCRIPT" ]]; then
+  echo "[error] Evaluation entry point not found at $EVAL_SCRIPT" >&2
   exit 1
 fi
 
@@ -155,6 +162,9 @@ ts="$(date +%Y%m%d-%H%M%S)"
 run_tag="${RUN_NAME:-unet}"
 run_tag="${run_tag// /_}"
 RUN_LOG="$LOG_DIR/train-${run_tag}-${ts}.log"
+EVAL_LOG="$LOG_DIR/eval-${run_tag}-${ts}.log"
+CKPT_PATH="$MODEL_DIR/$RUN_NAME.weights.h5"
+TRAIN_CONFIG="$LOG_DIR/$RUN_NAME/config.json"
 
 echo "[seg-config] protocol=$PROTOCOL images=$TRAIN_IMAGE_DIR masks=$TRAIN_MASK_DIR model_dir=$MODEL_DIR log_dir=$LOG_DIR manifest=$PAIRS_MANIFEST"
 
@@ -201,5 +211,24 @@ fi
 
 echo "[seg-run] ${CMD[*]}"
 "${CMD[@]}" 2>&1 | tee "$RUN_LOG"
+
+if [[ "$RUN_EVAL_AFTER_TRAIN" != "0" ]]; then
+  if [[ ! -f "$CKPT_PATH" ]]; then
+    echo "[seg-eval] Skipping evaluation; checkpoint not found at $CKPT_PATH"
+  elif [[ ! -f "$TRAIN_CONFIG" ]]; then
+    echo "[seg-eval] Skipping evaluation; config not found at $TRAIN_CONFIG"
+  else
+    echo "[seg-eval] Running test evaluation for $RUN_NAME"
+    EVAL_CMD=(
+      "$PYTHON_BIN" -u "$EVAL_SCRIPT"
+      --checkpoint "$CKPT_PATH"
+      --config "$TRAIN_CONFIG"
+    )
+    echo "[seg-eval] ${EVAL_CMD[*]}"
+    if ! "${EVAL_CMD[@]}" 2>&1 | tee "$EVAL_LOG"; then
+      echo "[seg-eval] Evaluation command failed (see $EVAL_LOG)" >&2
+    fi
+  fi
+fi
 
 echo "Finished at: $(date)"

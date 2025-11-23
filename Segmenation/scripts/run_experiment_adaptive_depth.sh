@@ -11,12 +11,13 @@ SBATCH_SCRIPT="$SCRIPT_DIR/train_adaptive_simple.sbatch"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_EXPERIMENT_ROOT="$REPO_ROOT/experiments/experiment_2_adaptive_depth"
-
-SCRATCH_ROOT="${SEG_SCRATCH_ROOT:-/scratch/$USER/Segmenation}"
-SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiment_2_adaptive_depth"
-LOG_BASE="$SCRATCH_EXPERIMENT_ROOT/logs"
-MODEL_BASE="$SCRATCH_EXPERIMENT_ROOT/models"
+RUN_ROOT="${EXPERIMENT_RUN_ROOT:-$REPO_EXPERIMENT_ROOT/runs}"
+LOG_BASE="$RUN_ROOT/logs"
+SCRATCH_ROOT="${scratch:-${SCRATCH:-/scratch}}"
+MODEL_BASE="$RUN_ROOT/models"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
+TRAINING_CSV="$REPO_EXPERIMENT_ROOT/training_runs.csv"
+EVAL_CSV="$REPO_EXPERIMENT_ROOT/evaluation_runs.csv"
 PAIRS_MANIFEST="$REPO_ROOT/manifests/isic2017_train_val_pairs.json"
 GLOBAL_EXTRA_ARGS="${GLOBAL_EXTRA_ARGS:-}"
 PROTOCOL="${PROTOCOL:-A}"
@@ -27,13 +28,19 @@ if [[ ! -f "$SBATCH_SCRIPT" ]]; then
   exit 1
 fi
 
-if [[ ! -d "$SCRATCH_ROOT" ]]; then
-  echo "[error] Scratch root not found: $SCRATCH_ROOT" >&2
-  echo "        Set SEG_SCRATCH_ROOT to the desired scratch location before running." >&2
-  exit 1
-fi
-
 mkdir -p "$LOG_BASE" "$MODEL_BASE" "$META_BASE" "$(dirname "$PAIRS_MANIFEST")"
+mkdir -p "$(dirname "$TRAINING_CSV")" "$(dirname "$EVAL_CSV")"
+
+ensure_csv_header() {
+  local csv_path="$1"
+  local header="$2"
+  if [[ ! -f "$csv_path" ]]; then
+    echo "$header" > "$csv_path"
+  fi
+}
+
+ensure_csv_header "$TRAINING_CSV" "submitted_at,job_id,scale,batch_size,depth,run_name,log_dir,model_dir"
+ensure_csv_header "$EVAL_CSV" "submitted_at,job_id,run_name,scale,batch_size,depth,log_dir,model_dir,config_path,status"
 
 # Design table: target depth per scale with conservative batch sizes for a 2080 Ti.
 SCALES=(
@@ -46,6 +53,7 @@ SCALES=(
   0.80
 )
 
+# Depth per scale comes straight from the architecture table (ignore intermediate feature sizes).
 declare -A DEPTH_FOR_SCALE=(
   [0.20]=1
   [0.30]=2
@@ -59,9 +67,9 @@ declare -A DEPTH_FOR_SCALE=(
 declare -A BATCH_SIZE_FOR_SCALE=(
   [0.20]=8
   [0.30]=8
-  [0.40]=6
-  [0.50]=4
-  [0.60]=3
+  [0.40]=8
+  [0.50]=6
+  [0.60]=4
   [0.70]=2
   [0.80]=1
 )
@@ -97,8 +105,24 @@ for scale in "${SCALES[@]}"; do
     echo "submitted=$(date --iso-8601=seconds)"
   } > "$META_BASE/${run_suffix}.txt"
 
-  echo "  -> scale=${scale}, depth=${depth}, batch_size=${batch_size}, run_name=${run_name}"
-  sbatch "$SBATCH_SCRIPT"
+  echo "  -> scale=${scale}, depth=${depth}, batch_size=${batch_size}, run_name=${run_name}, log_dir=${log_dir}, model_dir=${model_dir}"
+  submit_output="$(sbatch "$SBATCH_SCRIPT")"
+  echo "$submit_output"
+  job_id="$(awk '{print $4}' <<<"$submit_output")"
+
+  if [[ -n "$job_id" ]]; then
+    submission_iso="$(date --iso-8601=seconds)"
+    {
+      printf "%s,%s,%s,%s,%s,%s,%s,%s\n" \
+        "$submission_iso" "$job_id" "$scale" "$batch_size" "$depth" "$run_name" "$log_dir" "$model_dir"
+    } >> "$TRAINING_CSV"
+
+    config_path="$log_dir/$run_name/config.json"
+    {
+      printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
+        "$submission_iso" "$job_id" "$run_name" "$scale" "$batch_size" "$depth" "$log_dir" "$model_dir" "$config_path" "pending"
+    } >> "$EVAL_CSV"
+  fi
 done
 
 echo "All Experiment 2 jobs submitted. Use 'squeue -u $USER' to monitor them."

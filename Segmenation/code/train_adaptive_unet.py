@@ -483,6 +483,7 @@ def prepare_callbacks(
             monitor="val_dice",
             mode="max",
             save_best_only=True,
+            save_weights_only=True,
             verbose=1,
         )
     )
@@ -642,7 +643,7 @@ def train(args: argparse.Namespace) -> None:
     run_dir = log_root / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    ckpt_path = model_dir / f"{run_name}.keras"
+    ckpt_path = model_dir / f"{run_name}.weights.h5"
 
     callbacks = prepare_callbacks(
         run_dir=run_dir,
@@ -674,6 +675,8 @@ def train(args: argparse.Namespace) -> None:
         "epochs_ran": len(history.history.get("loss", [])),
         "initial_lr": protocol.initial_lr,
         "batch_size": batch_size,
+        "base_channels": args.base_channels,
+        "depth": args.depth,
         "image_size": image_size,
         "train_samples": train_count,
         "val_samples": val_count,
@@ -686,7 +689,10 @@ def train(args: argparse.Namespace) -> None:
         "fit_verbose": args.fit_verbose,
         "print_model_summary": bool(args.print_model_summary),
         "threshold": DEFAULT_THRESHOLD,
+        "run_name": run_name,
         "model_checkpoint": str(ckpt_path),
+        "model_dir": str(model_dir),
+        "run_dir": str(run_dir),
         "train_images": str(train_images),
         "train_masks": str(train_masks),
         "val_images": str(val_images),
