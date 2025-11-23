@@ -663,12 +663,8 @@ def train(args: argparse.Namespace) -> None:
 
     ckpt_path = model_dir / f"{run_name}.weights.h5"
 
-    patience = protocol.early_stopping_patience
-    if patience is not None and batch_size <= 2:
-        patience = patience + PATIENCE_BONUS_FOR_SMALL_BATCH
-
-    patience = protocol.early_stopping_patience
-    if patience is not None and batch_size <= 2:
+    patience = args.patience if args.patience > 0 else protocol.early_stopping_patience
+    if args.patience <= 0 and patience is not None and batch_size <= 2:
         patience = patience + PATIENCE_BONUS_FOR_SMALL_BATCH
 
     timing_callback = EpochTiming(steps_per_epoch=steps_per_epoch, log_path=run_dir / "epoch_times.csv")
@@ -679,6 +675,13 @@ def train(args: argparse.Namespace) -> None:
         patience=patience,
     )
     callbacks.append(timing_callback)
+
+    if ckpt_path.exists():
+        print(f"[model] Found existing checkpoint at {ckpt_path}. Loading weights to resume/finetune.")
+        try:
+            model.load_weights(str(ckpt_path))
+        except Exception as e:
+            print(f"[model] Failed to load weights: {e}")
 
     history = model.fit(
         train_ds,
@@ -766,6 +769,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_dir", type=str, default=str(MODEL_ROOT))
     parser.add_argument("--log_dir", type=str, default=str(LOG_ROOT))
     parser.add_argument("--run_name", type=str, default=None)
+    parser.add_argument("--patience", type=int, default=0, help="Override early stopping patience (0 uses protocol default).")
     return parser.parse_args()
 
 

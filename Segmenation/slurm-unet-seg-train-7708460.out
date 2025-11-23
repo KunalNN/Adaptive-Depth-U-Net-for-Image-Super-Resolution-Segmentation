@@ -1,0 +1,30 @@
+[error] Unable to locate repo root. Set REPO_DIR when submitting the job.
+
+
+###############################################################################
+Science Cluster
+Job 7708460 for user 'knarwani'
+Finished at: Sun Nov 23 14:24:12 CET 2025
+
+Job details:
+============
+
+Name                : allocation
+User                : knarwani
+Partition           : 
+Nodes               : cn47
+Cores               : 4
+State               : FAILED
+Submit              : 2025-11-23T14:24:11
+Start               : 2025-11-23T14:24:11
+End                 : 2025-11-23T14:24:12
+Reserved walltime   : --
+Used walltime       : 00:00:01
+Used CPU time       : --
+% User (Computation): 54.55%
+% System (I/O)      :  0.00%
+Mem reserved        : 16?
+Max Mem used        : 8.00K (cn47)
+Max Disk Write      : 0.00  (cn47)
+Max Disk Read       : 0.00  (cn47)
+

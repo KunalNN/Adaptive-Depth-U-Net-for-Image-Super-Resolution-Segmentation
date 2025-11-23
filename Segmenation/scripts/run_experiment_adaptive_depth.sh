@@ -97,6 +97,7 @@ for scale in "${SCALES[@]}"; do
   export RUN_NAME="$run_name"
   export PAIRS_MANIFEST="$PAIRS_MANIFEST"
   export EXTRA_ARGS="$GLOBAL_EXTRA_ARGS"
+  export REPO_DIR="$REPO_ROOT"
 
   {
     echo "scale=${scale}"

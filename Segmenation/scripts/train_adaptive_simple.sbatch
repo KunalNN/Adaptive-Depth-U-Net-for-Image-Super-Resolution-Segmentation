@@ -8,15 +8,36 @@
 #SBATCH --mem=31G
 #SBATCH --time=12:00:00
 #SBATCH -J unet-seg-train
-#SBATCH --output=slurm-%x-%j.out
-#SBATCH --error=slurm-%x-%j.out
+#SBATCH --chdir=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation
+#SBATCH --output=Segmenation/logs/slurm-%x-%j.out
+#SBATCH --error=Segmenation/logs/slurm-%x-%j.out
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+# Prefer the directory where sbatch was invoked; fall back to REPO_DIR env or the
+# script parent. This keeps the setup predictable without nested heuristics.
+if [[ -z "${REPO_DIR:-}" ]]; then
+  if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+    REPO_DIR="$SLURM_SUBMIT_DIR"
+  else
+    REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  fi
+fi
+
+if [[ ! -d "$REPO_DIR/Segmenation" || ! -d "$REPO_DIR/Super_resolution" ]]; then
+  PARENT_REPO="$(cd "$REPO_DIR/.." && pwd)"
+  if [[ -d "$PARENT_REPO/Segmenation" && -d "$PARENT_REPO/Super_resolution" ]]; then
+    REPO_DIR="$PARENT_REPO"
+  else
+    echo "[error] Unable to locate repo root (checked $REPO_DIR and $PARENT_REPO). Set REPO_DIR when submitting the job." >&2
+    exit 1
+  fi
+fi
 SEG_DIR="$REPO_DIR/Segmenation"
 PY_SCRIPT="${PY_SCRIPT:-$SEG_DIR/code/train_adaptive_unet.py}"
+EVAL_SCRIPT="${EVAL_SCRIPT:-$SEG_DIR/code/evaluate_adaptive_unet.py}"
 PYTHON_BIN="${PYTHON_BIN:-$REPO_DIR/Super_resolution/.venv/bin/python}"
 VENV_ACTIVATE="${VENV_ACTIVATE:-$REPO_DIR/Super_resolution/.venv/bin/activate}"
 
@@ -91,7 +112,7 @@ TRAIN_MASK_DIR="${TRAIN_MASK_DIR:-${DATASET_PATHS[1]}}"
 VAL_IMAGE_DIR="${VAL_IMAGE_DIR:-${DATASET_PATHS[2]}}"
 VAL_MASK_DIR="${VAL_MASK_DIR:-${DATASET_PATHS[3]}}"
 MODEL_DIR="${MODEL_DIR:-${DATASET_PATHS[4]}}"
-LOG_DIR="${LOG_DIR:-$SEG_DIR/logs/runs}"
+LOG_DIR="${LOG_DIR:-$SEG_DIR/logs}"
 
 mkdir -p "$MODEL_DIR" "$LOG_DIR"
 
@@ -165,6 +186,7 @@ CMD=(
   --depth "$DEPTH"
   --model_dir "$MODEL_DIR"
   --log_dir "$LOG_DIR"
+  --patience "${PATIENCE:-0}"
 )
 
 if [[ -n "$RUN_NAME" ]]; then
