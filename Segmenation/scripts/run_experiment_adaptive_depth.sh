@@ -13,7 +13,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_EXPERIMENT_ROOT="$REPO_ROOT/experiments/experiment_2_adaptive_depth"
 RUN_ROOT="${EXPERIMENT_RUN_ROOT:-$REPO_EXPERIMENT_ROOT/runs}"
 LOG_BASE="$RUN_ROOT/logs"
-SCRATCH_ROOT="${scratch:-${SCRATCH:-/scratch}}"
 MODEL_BASE="$RUN_ROOT/models"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
 TRAINING_CSV="$REPO_EXPERIMENT_ROOT/training_runs.csv"
@@ -81,9 +80,14 @@ for scale in "${SCALES[@]}"; do
   run_name="exp2_adaptive_depth_scale${scale}"
   timestamp="$(date +%Y%m%d-%H%M%S)"
   run_suffix="${run_name}_${timestamp}"
-  log_dir="$LOG_BASE/$run_suffix"
-  model_dir="$MODEL_BASE/$run_suffix"
-  mkdir -p "$log_dir" "$model_dir"
+  scale_root="$RUN_ROOT/scale_${scale}"
+  log_root="$scale_root/training/logs"
+  model_root="$scale_root/training/models"
+  meta_root="$scale_root/metadata"
+  log_dir="$log_root/$run_suffix"
+  model_dir="$model_root/$run_suffix"
+
+  mkdir -p "$log_root" "$model_root" "$meta_root"
 
   export SCALE="$scale"
   export BATCH_SIZE="$batch_size"
@@ -98,14 +102,16 @@ for scale in "${SCALES[@]}"; do
     echo "scale=${scale}"
     echo "batch_size=${batch_size}"
     echo "depth=${depth}"
+    echo "weight_decay=1e-4"
+    echo "patience_strategy=protocol_default_plus5_if_batch_size_le_2"
     echo "run_name=${run_name}"
     echo "log_dir=${log_dir}"
     echo "model_dir=${model_dir}"
     echo "pairs_manifest=${PAIRS_MANIFEST}"
     echo "submitted=$(date --iso-8601=seconds)"
-  } > "$META_BASE/${run_suffix}.txt"
+  } | tee "$META_BASE/${run_suffix}.txt" > "$meta_root/${run_suffix}.txt"
 
-  echo "  -> scale=${scale}, depth=${depth}, batch_size=${batch_size}, run_name=${run_name}, log_dir=${log_dir}, model_dir=${model_dir}"
+  echo "  -> scale=${scale}, depth=${depth}, batch_size=${batch_size}, run_name=${run_name}"
   submit_output="$(sbatch "$SBATCH_SCRIPT")"
   echo "$submit_output"
   job_id="$(awk '{print $4}' <<<"$submit_output")"
@@ -114,13 +120,13 @@ for scale in "${SCALES[@]}"; do
     submission_iso="$(date --iso-8601=seconds)"
     {
       printf "%s,%s,%s,%s,%s,%s,%s,%s\n" \
-        "$submission_iso" "$job_id" "$scale" "$batch_size" "$depth" "$run_name" "$log_dir" "$model_dir"
+        "$submission_iso" "$job_id" "$scale" "$batch_size" "$DEPTH" "$run_name" "$log_dir" "$model_dir"
     } >> "$TRAINING_CSV"
 
     config_path="$log_dir/$run_name/config.json"
     {
       printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
-        "$submission_iso" "$job_id" "$run_name" "$scale" "$batch_size" "$depth" "$log_dir" "$model_dir" "$config_path" "pending"
+        "$submission_iso" "$job_id" "$run_name" "$scale" "$batch_size" "$DEPTH" "$log_dir" "$model_dir" "$config_path" "pending"
     } >> "$EVAL_CSV"
   fi
 done
