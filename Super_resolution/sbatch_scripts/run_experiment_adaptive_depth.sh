@@ -25,6 +25,7 @@ MODEL_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resol
 EVAL_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment2/evaluation"
 SUMMARY_ARCHIVE_BASE="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment_2"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
+EXPERIMENT_ID="Experiment_2"
 
 if [[ ! -f "$SBATCH_SCRIPT" ]]; then
   echo "[error] Expected sbatch script not found at $SBATCH_SCRIPT" >&2
@@ -81,6 +82,7 @@ for scale in "${SCALES[@]}"; do
   export MODEL_DIR="$model_dir"
   export RUN_NAME="$run_name"
   export EXTRA_ARGS="--depth_override ${depth} --max_depth ${depth}"
+  export EXPERIMENT_ID="$EXPERIMENT_ID"
   export EVAL_OUTPUT_DIR="$EVAL_BASE"
   export SUMMARY_ARCHIVE_DIR="$SUMMARY_ARCHIVE_BASE"
 

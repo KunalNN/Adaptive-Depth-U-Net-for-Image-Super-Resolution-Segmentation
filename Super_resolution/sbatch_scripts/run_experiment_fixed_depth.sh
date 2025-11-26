@@ -22,6 +22,7 @@ SCRATCH_EXPERIMENT_ROOT="$SCRATCH_ROOT/experiments/experiment_1_constant_depth_3
 LOG_BASE="$REPO_EXPERIMENT_ROOT/logs"
 MODEL_BASE="$(cd "$SCRIPT_DIR/.." && pwd)/models/Experiment_1"
 META_BASE="$REPO_EXPERIMENT_ROOT/metadata"
+EXPERIMENT_ID="Experiment_1"
 
 if [[ ! -f "$SBATCH_SCRIPT" ]]; then
   echo "[error] Expected sbatch script not found at $SBATCH_SCRIPT" >&2
@@ -69,7 +70,9 @@ for scale in "${SCALES[@]}"; do
   export LOG_DIR="$log_dir"
   export MODEL_DIR="$model_dir"
   export RUN_NAME="$run_name"
+  export RUN_NAME="$run_name"
   export EXTRA_ARGS="--depth_override 3"
+  export EXPERIMENT_ID="$EXPERIMENT_ID"
 
 
   {

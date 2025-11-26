@@ -22,7 +22,10 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Input, Model, mixed_precision
 from tensorflow.keras import layers as L
-from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint
+from tensorflow.keras.callbacks import BackupAndRestore, EarlyStopping, ModelCheckpoint, Callback
+import time
+import csv
+
 
 from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, LOG_ROOT, MODEL_ROOT
 from shared.custom_layers import (
@@ -58,6 +61,104 @@ DEFAULT_RESIDUAL_HEAD_CHANNELS = 64
 
 # --- constants ---
 DATA_LR_SHRINK = 0.5  # To ensure that the low-resolution (LR) input remains consistent across all scales.
+
+
+# --------------------------------------------------------------------------- #
+# Custom Callbacks
+# --------------------------------------------------------------------------- #
+
+class CustomCSVLogger(Callback):
+    """
+    Logs training and validation metrics to separate CSV files.
+    Format: Wall time, Step, [Metrics...]
+    """
+    def __init__(self, train_log_path: Path, val_log_path: Path):
+        super().__init__()
+        self.train_log_path = train_log_path
+        self.val_log_path = val_log_path
+        self.train_file = None
+        self.val_file = None
+        self.train_writer = None
+        self.val_writer = None
+
+    def on_train_begin(self, logs=None):
+        # Open files in append mode if they exist, else write mode
+        mode = 'a' if self.train_log_path.exists() else 'w'
+        self.train_file = open(self.train_log_path, mode, newline='')
+        self.train_writer = csv.writer(self.train_file)
+        
+        mode = 'a' if self.val_log_path.exists() else 'w'
+        self.val_file = open(self.val_log_path, mode, newline='')
+        self.val_writer = csv.writer(self.val_file)
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        now = time.time()
+        
+        # Separate training and validation logs
+        train_logs = {k: v for k, v in logs.items() if not k.startswith('val_')}
+        val_logs = {k: v for k, v in logs.items() if k.startswith('val_')}
+        
+        # Write headers if files are empty/new
+        if self.train_file.tell() == 0:
+            self.train_writer.writerow(['Wall time', 'Step'] + list(train_logs.keys()))
+            self.train_file.flush()
+        
+        if self.val_file.tell() == 0 and val_logs:
+            # Remove 'val_' prefix for cleaner headers if desired, or keep it
+            headers = ['Wall time', 'Step'] + list(val_logs.keys())
+            self.val_writer.writerow(headers)
+            self.val_file.flush()
+
+        # Write rows
+        self.train_writer.writerow([now, epoch] + list(train_logs.values()))
+        self.train_file.flush()
+        
+        if val_logs:
+            self.val_writer.writerow([now, epoch] + list(val_logs.values()))
+            self.val_file.flush()
+
+    def on_train_end(self, logs=None):
+        if self.train_file:
+            self.train_file.close()
+        if self.val_file:
+            self.val_file.close()
+
+class EpochTimingCallback(Callback):
+    """
+    Logs epoch duration and step timings.
+    Format: epoch, duration_s, ms_per_step, steps_per_epoch
+    """
+    def __init__(self, log_path: Path):
+        super().__init__()
+        self.log_path = log_path
+        self.file = None
+        self.writer = None
+        self.epoch_start_time = 0
+
+    def on_train_begin(self, logs=None):
+        mode = 'a' if self.log_path.exists() else 'w'
+        self.file = open(self.log_path, mode, newline='')
+        self.writer = csv.writer(self.file)
+        if self.file.tell() == 0:
+            self.writer.writerow(['epoch', 'duration_s', 'ms_per_step', 'steps_per_epoch'])
+            self.file.flush()
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.epoch_start_time = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        duration = time.time() - self.epoch_start_time
+        steps = self.params.get('steps') or 1 # Avoid division by zero
+        ms_per_step = (duration * 1000) / steps
+        
+        self.writer.writerow([epoch, duration, ms_per_step, steps])
+        self.file.flush()
+
+    def on_train_end(self, logs=None):
+        if self.file:
+            self.file.close()
+
 
 
 # --------------------------------------------------------------------------- #
@@ -612,11 +713,22 @@ def train(args: argparse.Namespace) -> None:
 
     backup_dir = run_dir / "train_backup"
 
+    custom_csv_logger = CustomCSVLogger(
+        train_log_path=run_dir / f"runs_scale_{args.scale}.csv",
+        val_log_path=run_dir / f"validation_scale_{args.scale}.csv"
+    )
+    
+    epoch_timer = EpochTimingCallback(
+        log_path=run_dir / "epoch_times.csv"
+    )
+
     callbacks = [
         EarlyStopping(monitor="val_loss", patience=args.patience, restore_best_weights=True, verbose=1),
         ModelCheckpoint(filepath=str(ckpt_path), monitor="val_loss", save_best_only=True, verbose=1),
         BackupAndRestore(str(backup_dir)),
         tensorboard_callback,
+        custom_csv_logger,
+        epoch_timer,
     ]
 
     history = model.fit(
@@ -800,6 +912,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Epoch index to begin training from when resuming (must be < --epochs).",
+    )
+    parser.add_argument(
+        "--experiment_id",
+        type=str,
+        default=None,
+        help="Experiment identifier (e.g., Experiment_1, Experiment_2).",
     )
     return parser.parse_args()
 
