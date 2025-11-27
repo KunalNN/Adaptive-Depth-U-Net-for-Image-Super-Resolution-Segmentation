@@ -2,7 +2,7 @@
 
 This repository contains two deep learning pipelines for adaptive-depth U-Nets.
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### 1. Super Resolution
 **Goal:** Upscale low-resolution images.
@@ -40,7 +40,7 @@ bash scripts/run_experiment_fixed_depth.sh
 - `PROTOCOL`: Dataset protocol (default 'A').
 - `DEPTH`: Encoder depth (default 4).
 
-## 🛠️ Environment
+## Environment
 Both pipelines use the same Python environment located in `Super_resolution/.venv`.
 ```bash
 source Super_resolution/.venv/bin/activate
