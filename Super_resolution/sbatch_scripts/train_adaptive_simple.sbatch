@@ -11,6 +11,9 @@
 #SBATCH --output=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out
 #SBATCH --error=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out
 
+
+# ------------------------------- Environment setup and checks -------------------------------
+
 set -euo pipefail
 
 REPO_DIR="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation"
@@ -19,37 +22,50 @@ PY_SCRIPT="$SR_DIR/code/train_adaptive_unet.py"
 PYTHON_BIN="$SR_DIR/.venv/bin/python"
 VENV_ACTIVATE="$SR_DIR/.venv/bin/activate"
 
+# Check if Python interpreter exists
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "[error] Python interpreter not found at $PYTHON_BIN" >&2
   exit 1
 fi
 
+# Activate virtual environment
 source "$VENV_ACTIVATE"
 
+# Setup CUDA environment assuming its in /opt/cuda
 CUDA_HOME="${CUDA_HOME:-/opt/cuda}"
+# Cluster specific CUDA module loading
 if command -v module >/dev/null 2>&1; then
+  # Unload any existing modules to ensure clean environment so previous job doesn't affect this one
   module purge
+  # Load CUDA module if specified, otherwise load default CUDA module
   if [[ -n "${CUDA_MODULE:-}" ]]; then
     module load "$CUDA_MODULE"
   else
     module load cuda >/dev/null 2>&1 || true
   fi
+  # Load cuDNN module if specified, otherwise load default cuDNN module
   if [[ -n "${CUDNN_MODULE:-}" ]]; then
     module load "$CUDNN_MODULE"
   fi
+  # List loaded modules for debugging
   module -t list 2>&1 || true
 fi
 
+# Add CUDA bin and lib64 to PATH and LD_LIBRARY_PATH
 if [[ -d "$CUDA_HOME/bin" ]]; then
   PATH="$CUDA_HOME/bin:${PATH:-}"
 fi
 if [[ -d "$CUDA_HOME/lib64" ]]; then
   LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
+
+# ------------------------------- Dataset and Configuration -------------------------------
+
 export PATH LD_LIBRARY_PATH
 
 export PYTHONPATH="$SR_DIR/code:${PYTHONPATH:-}"
 
+# Get dataset paths from dataset_paths.py 
 readarray -t DATASET_PATHS < <("$PYTHON_BIN" - <<'PY'
 from dataset_paths import HR_TRAIN_DIR, LR_TRAIN_DIR, MODEL_ROOT, LOG_ROOT
 print(HR_TRAIN_DIR)
@@ -59,15 +75,17 @@ print(LOG_ROOT)
 PY
 )
 
+# Verify dataset paths exist
 if [[ ${#DATASET_PATHS[@]} -lt 4 ]]; then
   echo "[error] Unable to resolve dataset paths from dataset_paths.py" >&2
   exit 1
 fi
-
+# Set default values for dataset paths
 HR_DIR="${HR_DIR:-${DATASET_PATHS[0]}}"
 MODEL_DIR="${MODEL_DIR:-${DATASET_PATHS[2]}}"
 LOG_DIR="${LOG_DIR:-${DATASET_PATHS[3]}}"
 
+# Set default values for Hyperparameters
 SCALE="${SCALE:-0.5}"
 PATCH_SIZE="${PATCH_SIZE:-256}"
 PATCHES_PER_IMAGE="${PATCHES_PER_IMAGE:-6}"
@@ -85,8 +103,14 @@ EVAL_OUTPUT_DIR="${EVAL_OUTPUT_DIR:-$SR_DIR/logs/experiment1/evaluation}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-$BATCH_SIZE}"
 SUMMARY_ARCHIVE_DIR="${SUMMARY_ARCHIVE_DIR:-$SR_DIR/logs/experiment_1}"
 
+TEST_DATA_DIR="${TEST_DATA_DIR:-$SR_DIR/test_data/X2}"
+
+# ------------------------------- Training Execution -------------------------------
+
+# Create model and log directories
 mkdir -p "$MODEL_DIR" "$LOG_DIR"
 
+# Verify directories exist
 if [[ ! -d "$HR_DIR" ]]; then
   echo "[error] High-resolution directory not found: $HR_DIR" >&2
   exit 1
@@ -97,6 +121,9 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
   exit 1
 fi
 
+# ------------------------------- CUDA Environment Setup -------------------------------
+
+# Get CUDA paths from Python environment
 PIP_CUDA_PATHS="$("$PYTHON_BIN" - <<'PY'
 import os, site
 paths = []
@@ -153,6 +180,7 @@ CMD=("$PYTHON_BIN" -u "$PY_SCRIPT"
   --model_dir "$MODEL_DIR"
   --log_dir "$LOG_DIR"
   --experiment_id "$EXPERIMENT_ID"
+  --test_data_dir "$TEST_DATA_DIR"
 )
 
 if [[ "$MIXED_PRECISION" != "0" ]]; then

@@ -833,6 +833,148 @@ def train(args: argparse.Namespace) -> None:
     writer.flush()
     writer.close()
 
+    # ----------------------------------------------------------------------- #
+    # Test Data Evaluation (New Section)
+    # ----------------------------------------------------------------------- #
+    if args.test_data_dir:
+        test_data_dir = Path(args.test_data_dir).expanduser()
+        if test_data_dir.exists():
+            print(f"[info] Running evaluation on test data from: {test_data_dir}")
+            test_images = sorted_alphanumeric(glob.glob(str(test_data_dir / f"*{image_suffix}")))
+            
+            if not test_images:
+                print(f"[warn] No images found in {test_data_dir} with suffix {image_suffix}")
+            else:
+                # Create evaluation dataset (HR only, LR synthesized)
+                # We use a batch size of 1 to handle varying image sizes if needed, 
+                # or just for simplicity in per-image reporting.
+                # However, make_eval_patch_dataset tiles images. 
+                # If we want full image evaluation (assuming they fit in memory), we can load them directly.
+                # Given the user mentioned "cropped", we should probably use the patch-based approach 
+                # or ensure we handle full images if they are small enough.
+                # The existing make_eval_patch_dataset handles tiling.
+                
+                # Let's use make_eval_patch_dataset to be consistent and handle large images.
+                # But for reporting "per image", we need to aggregate patch metrics or run on full images.
+                # If images are 2K/4K, full image inference might OOM.
+                # Let's try to run on full images first (tiling is safer but complex to aggregate per image).
+                # Actually, the user asked for "evaluation.csv for each scale".
+                # Let's use the existing evaluation loop logic but applied to this specific dataset
+                # and save per-image results if possible, or at least the aggregate.
+                
+                # To get per-image metrics, we should iterate over images one by one.
+                
+                eval_csv_path = run_dir / "evaluation.csv"
+                with open(eval_csv_path, 'w', newline='') as csvfile:
+                    fieldnames = ['filename', 'psnr', 'ssim', 'mse']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    total_psnr = 0
+                    total_ssim = 0
+                    total_mse = 0
+                    count = 0
+                    
+                    for img_path in test_images:
+                        try:
+                            # Load full image
+                            hr_image = load_rgb_image_full(img_path) # Returns tensor (H, W, 3)
+                            
+                            # Ensure dimensions are multiples of scale (or just handle it)
+                            # degrade_to_lr_tf handles resizing.
+                            
+                            # Synthesize LR
+                            h, w = hr_image.shape[0], hr_image.shape[1]
+                            
+                            # Crop to be multiple of scale if needed? 
+                            # The model architecture (U-Net) with resizing might require specific input sizes 
+                            # if not fully convolutional/adaptive. 
+                            # But our model uses ResizeByScale, so it should handle any size 
+                            # as long as it's not too small for the depth.
+                            
+                            # Let's just run on the full image.
+                            lr_image = degrade_to_lr_tf(hr_image, args.scale, h) # This function name is slightly misleading, it returns degraded then upsampled? 
+                            # Wait, degrade_to_lr_tf in this script:
+                            # resized = tf.image.resize(hr_image, [down_size, down_size], ...)
+                            # restored = tf.image.resize(resized, [output_size, output_size], ...)
+                            # It returns the "restored" (upsampled) image? No, wait.
+                            # Let's check degrade_to_lr_tf implementation.
+                            # It returns "restored" which is LR resized back to HR size (bicubic upsampling usually).
+                            # BUT the model expects LR input. 
+                            # The model input shape is (None, None, 3) usually?
+                            # Let's check model input. Input(shape=(input_size, input_size, 3)).
+                            # If we use fully convolutional, we can pass (None, None, 3).
+                            # But build_super_resolution_unet takes input_size.
+                            
+                            # If the model was built with fixed input_size (256), we might need to tile.
+                            # However, Keras models can often handle variable input size if built with (None, None, 3).
+                            # The script uses `input_size=hr_size` (256).
+                            # Let's rebuild the model with (None, None, 3) for evaluation?
+                            # Or just use the existing model and hope it accepts variable size.
+                            # If not, we MUST use tiling.
+                            
+                            # Given the user said "passed proper like cropped", they might expect tiling.
+                            # The `make_eval_patch_dataset` does tiling.
+                            # Let's use `make_eval_patch_dataset` for each image individually to get per-image metrics.
+                            
+                            # Actually, let's try to run on the full image first if it fits. 
+                            # If the model has fixed input shape, it will fail.
+                            # But `make_eval_patch_dataset` is safer.
+                            
+                            # Re-using make_eval_patch_dataset for a single image list
+                            ds, _, _ = make_eval_patch_dataset(
+                                [img_path],
+                                patch_size=patch_size,
+                                scale=DATA_LR_SHRINK,
+                                batch_size=1, # Process patches one by one
+                                stride=args.eval_stride or patch_size
+                            )
+                            
+                            # Aggregate metrics for this image
+                            img_psnr, img_ssim, img_mse = [], [], []
+                            for lr_patch, hr_patch in ds:
+                                pred_rgb = model(lr_patch, training=False)
+                                pred_rgb = tf.cast(tf.clip_by_value(pred_rgb, 0.0, 1.0), tf.float32)
+                                hr_rgb = tf.cast(hr_patch, tf.float32)
+                                
+                                pred_y = rgb_to_luma_bt601(pred_rgb)
+                                hr_y = rgb_to_luma_bt601(hr_rgb)
+                                
+                                if eval_shave > 0:
+                                    pred_y = pred_y[:, eval_shave:-eval_shave, eval_shave:-eval_shave, :]
+                                    hr_y = hr_y[:, eval_shave:-eval_shave, eval_shave:-eval_shave, :]
+                                
+                                img_psnr.append(tf.image.psnr(hr_y, pred_y, max_val=1.0).numpy())
+                                img_ssim.append(tf.image.ssim(hr_y, pred_y, max_val=1.0).numpy())
+                                img_mse.append(tf.reduce_mean(tf.square(hr_y - pred_y)).numpy())
+                            
+                            if img_psnr:
+                                avg_psnr = np.mean(img_psnr)
+                                avg_ssim = np.mean(img_ssim)
+                                avg_mse = np.mean(img_mse)
+                                
+                                writer.writerow({
+                                    'filename': Path(img_path).name,
+                                    'psnr': avg_psnr,
+                                    'ssim': avg_ssim,
+                                    'mse': avg_mse
+                                })
+                                
+                                total_psnr += avg_psnr
+                                total_ssim += avg_ssim
+                                total_mse += avg_mse
+                                count += 1
+                                
+                        except Exception as e:
+                            print(f"[error] Failed to evaluate {img_path}: {e}")
+                            
+                    if count > 0:
+                        print(f"Test Data Evaluation Complete. Average PSNR: {total_psnr/count:.4f}")
+                    else:
+                        print("[warn] No images evaluated successfully.")
+        else:
+            print(f"[warn] Test data directory not found: {test_data_dir}")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train adaptive-depth U-Net for super-resolution.")
@@ -918,6 +1060,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Experiment identifier (e.g., Experiment_1, Experiment_2).",
+    )
+    parser.add_argument(
+        "--test_data_dir",
+        type=str,
+        default=None,
+        help="Directory containing test images for evaluation after training.",
     )
     return parser.parse_args()
 
