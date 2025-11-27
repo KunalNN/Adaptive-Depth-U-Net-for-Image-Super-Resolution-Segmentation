@@ -4,6 +4,8 @@
 # reconstruction scale. Each sbatch submission reuses train_adaptive_simple.sbatch
 # and pins the encoder depth to three levels by passing --depth_override 3.
 
+# ------------------------------- Setup -------------------------------
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +33,8 @@ fi
 
 mkdir -p "$LOG_BASE" "$MODEL_BASE" "$META_BASE"
 
+# ------------------------------- Experiment Setup -------------------------------
+
 # Scale sweep defined in Table 1 (Experiment 1).
 SCALES=(
   0.20
@@ -54,6 +58,8 @@ declare -A BATCH_SIZE_FOR_SCALE=(
   [0.80]=1
   [0.90]=1
 )
+
+# ------------------------------- Submission Loop -------------------------------
 
 echo "Submitting Experiment 1 runs (depth=3, varying scale)"
 for scale in "${SCALES[@]}"; do

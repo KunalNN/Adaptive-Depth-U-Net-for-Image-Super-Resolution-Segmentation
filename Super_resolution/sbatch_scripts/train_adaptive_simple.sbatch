@@ -123,7 +123,7 @@ fi
 
 # ------------------------------- CUDA Environment Setup -------------------------------
 
-# Get CUDA paths from Python environment
+# Get CUDA paths from Python environment robust fallback if system CUDA is missing 
 PIP_CUDA_PATHS="$("$PYTHON_BIN" - <<'PY'
 import os, site
 paths = []
@@ -161,11 +161,14 @@ if [[ -n "$PIP_CUDA_PATHS" ]]; then
   fi
 fi
 
+# Timestamp for run log
 ts="$(date +%Y%m%d-%H%M%S)"
 RUN_LOG="$LOG_DIR/run-simple-scale${SCALE}-${ts}.log"
 
+# Print configuration
 echo "[simple-config] scale=$SCALE hr_dir=$HR_DIR model_dir=$MODEL_DIR log_dir=$LOG_DIR experiment_id=$EXPERIMENT_ID"
 
+# ----------------------------- Command to run training script -----------------------------
 CMD=("$PYTHON_BIN" -u "$PY_SCRIPT"
   --scale "$SCALE"
   --high_res_dir "$HR_DIR"
@@ -204,6 +207,8 @@ if [[ -n "$EXTRA_ARGS" ]]; then
   CMD+=($EXTRA_ARGS)
 fi
 
+# ----------------------------- Depth Override -----------------------------
+
 DEPTH_OVERRIDE_VALUE=""
 if [[ "${EXTRA_ARGS:-}" =~ --depth_override[[:space:]]*([0-9]+) ]]; then
   DEPTH_OVERRIDE_VALUE="${BASH_REMATCH[1]}"
@@ -218,6 +223,8 @@ fi
 echo "[simple-run] ${CMD[*]}"
 "${CMD[@]}" 2>&1 | tee "$RUN_LOG"
 
+# ----------------------------- Summary Archiving -----------------------------
+
 if [[ -n "$SUMMARY_ARCHIVE_DIR" ]]; then
   mkdir -p "$SUMMARY_ARCHIVE_DIR"
   summary_path="$(ls -t "$LOG_DIR"/*/model_summary.txt 2>/dev/null | head -n 1 || true)"
@@ -228,6 +235,8 @@ if [[ -n "$SUMMARY_ARCHIVE_DIR" ]]; then
     echo "[warn] No model_summary.txt found under $LOG_DIR to archive." >&2
   fi
 fi
+
+# ----------------------------- Evaluation -----------------------------
 
 mkdir -p "$EVAL_OUTPUT_DIR"
 checkpoint_path="$(ls -t "$MODEL_DIR"/unet_adaptive_scale_new_loss*.keras 2>/dev/null | head -n 1 || true)"

@@ -4,6 +4,8 @@
 # Each sbatch submission reuses train_adaptive_simple.sbatch and configures the encoder
 # depth to the per-scale target while keeping batch sizes within 2080 Ti limits.
 
+# ------------------------------- Setup -------------------------------
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +43,8 @@ ensure_csv_header() {
 ensure_csv_header "$TRAINING_CSV" "submitted_at,job_id,scale,batch_size,depth,run_name,log_dir,model_dir"
 ensure_csv_header "$EVAL_CSV" "submitted_at,job_id,run_name,scale,batch_size,depth,log_dir,model_dir,config_path,status"
 
+# ------------------------------- Experiment Setup -------------------------------
+
 # Design table: target depth per scale with conservative batch sizes for a 2080 Ti.
 SCALES=(
   0.20
@@ -72,6 +76,8 @@ declare -A BATCH_SIZE_FOR_SCALE=(
   [0.70]=2
   [0.80]=1
 )
+
+# ------------------------------- Submission Loop -------------------------------
 
 echo "Submitting Experiment 2 runs (adaptive depth per scale)"
 for scale in "${SCALES[@]}"; do

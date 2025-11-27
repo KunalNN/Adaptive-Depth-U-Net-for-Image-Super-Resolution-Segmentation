@@ -4,6 +4,8 @@
 # reconstruction scale. Each sbatch submission reuses train_adaptive_simple.sbatch
 # and pins the encoder depth to four levels by exporting DEPTH=4.
 
+# ------------------------------- Setup -------------------------------
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +43,8 @@ ensure_csv_header() {
 ensure_csv_header "$TRAINING_CSV" "submitted_at,job_id,scale,batch_size,depth,run_name,log_dir,model_dir"
 ensure_csv_header "$EVAL_CSV" "submitted_at,job_id,run_name,scale,batch_size,depth,log_dir,model_dir,config_path,status"
 
+# ------------------------------- Experiment Setup -------------------------------
+
 # Scale sweep defined in Table 1 (Experiment 1).
 SCALES=(
   0.20
@@ -64,6 +68,8 @@ declare -A BATCH_SIZE_FOR_SCALE=(
   [0.80]=1
   [0.90]=1
 )
+
+# ------------------------------- Submission Loop -------------------------------
 
 echo "Submitting Experiment 1 runs (depth=4, varying scale)"
 for scale in "${SCALES[@]}"; do
