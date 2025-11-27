@@ -1,0 +1,102 @@
+\chapter{Introduction}\label{introduction}
+
+\paragraph{Problem Statement}
+
+ Deep Convolution Neural Networks (CNNs) have set the state of the art in the image-to-image translation task, most notably in concepts like Super-Resolution (SR) and Image Segmentation. Much of this progress was driven by the introduction of the U-Net architecture, characterized by its contracting path to capture context and its symmetric expanding path with skip connections for precise localization. This structure has proven effective across both domains, including biomedical image segmentation\cite{ronneberger2015unet} and image super-resolution (SISR)\cite{super1}.
+
+
+However, when applied across a broad spectrum of inputs, the current implementation of the U-Net faces some architectural limitations. 
+
+\begin{itemize} 
+    \item Fixed Capacity and Variable task difficulty: U-Net architectures are designed with a fixed number of encoder-decoder levels (fixed depth). For deep networks in general, the rule is that greater depth generally leads to better performance but significantly higher computational cost and it leads to slower convergence because of the large number of parameters. 
+    \item Sub-Optimal Scalling, Loss of Spatial detail and Stability: The vanilla U-Net architecture consists of a pooling and downsampling path, which present difficulties when handling fine details and adpating to different scales. Many deep networks (DN) designed for image task use max-pooling layers which can reduce localization accuracy\cite{ronneberger2015unet}. When features are repeatedly downsampled in the encoder, low-level details fade. As a result, the reconstructed high-resolution image is often missing fine textures.
+    \item The Need for Differentiable Scaling and Improved Operators: The need for improved scaling mechanisms stems directly from the limitations of standard operations in CNNs, such as max pooling, which is used in the contracting path of the original U-Net. Conventional pooling operations, including both max pooling and mean pooling, lose some important feature information when processing feature maps. Specifically: 
+    \begin{itemize} 
+        \item Max Pooling selects only the maximum value, which can be sensitive to noise. 
+        \item Mean Pooling smooths the image and leads to the loss of high frequency information. \end{itemize} 
+    Moreover, the traditional U-Net relies on fixed pooling, upsampling operations (like transposed convolutions), or standard interpolation methods that are discrete and non-differentiable with respect to scale. This dependence on fixed-stride operations limits the network's flexibility and spatial precision, particularly when handling non-integer scale factors. Therefore, there is a requirement for differentiable resizing layers (such as ResizeByScale and ResizeToMatch) that perform continuous spatial scaling using methods like bilinear interpolation, enabling the network to adapt its depth and spatial scaling dynamically during training while maintaining smooth gradient flow. 
+\end{itemize}
+
+These limitations highlight the requirement for architectural innovations that allow the U-Net framework to dynamically adapt its internal structure—including its depth and scaling operators—to the specific input scale and task demands, thereby improving feature retention and reconstruction quality
+
+ 
+
+\paragraph{Primary research question}
+How does variation in scale factor impact U-Net performance? 
+
+\paragraph{Sub research question}
+How does the proposed adaptive-depth U-Net architecture, which adjusts its number of encoder-decoder levels based on the scale factor $(s)$, compare against a fixed-depth U-Net baseline in the field of super-resolution and segmentation? 
+
+\begin{itemize}
+
+
+
+\item motivate why this problem must be solved
+
+Solving this problem is important because current U-Net–based systems implicitly assume that a single fixed architectural depth is equally suitable for all input scales. However, it is not evident that this assumption holds in scenarios where the amount of available spatial information varies strongly with the scale factor. Inputs with limited detail—such as smooth backgrounds or heavily downscaled images—may gain little from deep encoder–decoder hierarchies, which risk collapsing feature maps and discarding fine information. In contrast, inputs containing richer structure and high-frequency content may benefit from deeper networks that can extract more complex features. By examining how performance changes across different scale factors, we can determine whether a fixed-depth U-Net is sufficient or whether different input regimes demand different architectural capacities. Addressing this question helps clarify whether adaptive architectures are necessary for optimal reconstruction and segmentation across varying levels of spatial detail.
+
+
+\item demonstrates that a (new) solution is needed
+
+Traditional U-Net architectures rely on fixed-depth encoder–decoder pathways and discrete downsampling and upsampling operators such as max pooling and transposed convolutions. These design choices work well when training and inference occur at a single, fixed resolution, but they become limiting when the scale factor varies. Fixed depth forces the same capacity on inputs with vastly different spatial complexities, while fixed-stride operations are not differentiable with respect to scale and often misalign feature maps in the skip connections. As the scale factor changes, these limitations can lead to either an unnecessary loss of spatial detail or an inefficient overuse of computational resources. Because existing U-Net variants do not adapt their internal structure to the input scale, they cannot explicitly address these issues. This gap motivates the development of a U-Net architecture whose depth and scaling operators adjust dynamically to the characteristics of the input.
+
+
+\item explain the intuition behind your solution
+
+The key intuition behind my solution lies in resolving the mismatch between the fixed capacity of max pooling of traditional deep learning architectures and the variable complexity in the input. The primary intuition is that the ideal network depth should not be fixed, but should adapt most based on the input scale factor ($s$). The vanilla U-Net architecture consists of a fixed depth structure, which is suboptimal when dealing with a wide range of inputs for super-resolution. 
+
+
+
+
+\item motivate why / how your solution solves the problem (this is technical)
+
+My thesis solves this problem by introducing a dynamic structure influenced by the input scale $s$. The motivation for the solution is linked to two technical phases of investigating the limitations of fixed depth (the baseline) and implementing adaptive depth using continuous, differentiable scaling layers (the core technical contribution).
+
+Motivation of the technical phase 1: The core technical problem stems from the vanilla U-Net using $2 \times 2$ max pooling with a stride of 2. My thesis first investigates the consequences of this fixed structure by measuring/verifying the influences of scale on the network with fixed depth. This established the baseline performance ceiling of the non-adaptive architecture. 
+
+Motivation of the technical phase 2: The solution technically links the network capacity (depth) to the spatial resolution required, defined by the scale factor. 
+
+\item explain how it compares with related work
+
+\end{itemize}
+
+Close the introduction with a paragraph in which the content of the next chapters
+is briefly mentioned (one sentence per chapter). 
+
+Starting a new paragraph is done by inserting an empty line like this.
+
+
+\paragraph{Primary research question}
+
+How does the proposed adaptive-depth U-Net architecture, which adjusts its number of encoder–decoder levels based on the scale factor $(s)$, compare against a fixed-depth U-Net baseline in the field of super-resolution and segmentation? 
+
+\begin{itemize}
+
+\item \textbf{Motivate why this problem must be solved.}
+
+Solving this problem is important because current U-Net–based systems implicitly assume that a single fixed architectural depth is equally suitable for all input scales. It is not clear that this assumption holds when the amount of available spatial information varies strongly with the scale factor. Inputs with limited detail, such as smooth backgrounds or heavily downscaled images, may gain little from deep encoder–decoder hierarchies, which risk collapsing feature maps and discarding fine information. In contrast, inputs containing richer structure and high-frequency content may benefit from deeper networks that can extract more complex features. By examining how performance changes across different scale factors, this thesis investigates whether a fixed-depth U-Net is sufficient or whether different types of inputs require different architectural capacities. Addressing this question clarifies whether adaptive architectures are necessary for optimal reconstruction and segmentation across varying levels of spatial detail.
+
+\item \textbf{Demonstrate that a (new) solution is needed.}
+
+Traditional U-Net architectures rely on fixed-depth encoder–decoder pathways and discrete downsampling and upsampling operators such as max pooling and transposed convolutions. These design choices work well when training and inference occur at a single, fixed resolution, but they become limiting when the scale factor varies. A fixed depth forces the same capacity on inputs with vastly different spatial complexities.
+
+Operations like max pooling with a fixed stride select the maximum value from a local window; therefore, they do not provide a smooth mathematical relationship (a derivative) describing how the output would change if the scale factor ($s$) were varied continuously. This makes them non-differentiable with respect to scale and can misalign feature maps in the skip connections. Thus, a new solution is needed in which interpolation-based methods—which are differentiable—are used to provide a smooth mathematical relationship, allowing the neural network to adjust and optimize gradients.
+
+As the scale factor changes, these limitations can lead either to unnecessary loss of spatial detail or to inefficient overuse of computational resources. Because existing U-Net variants do not adapt their internal structure to the input scale, they cannot explicitly address these issues. This gap motivates the development of a U-Net architecture whose depth and scaling operators adjust dynamically to the characteristics of the input.
+
+\item \textbf{Explain the intuition behind your solution.}
+
+The key intuition is to resolve the mismatch between the fixed capacity of conventional U-Net architectures and the variable complexity of inputs at different scale factors. Depth is treated as a resource that should be allocated according to how much spatial information the input still contains. For very small-scale factors, a deep encoder–decoder quickly reduces feature maps to tiny spatial sizes, increasing the risk of losing fine-grained structure; in such cases, a shallower network is both more stable and more efficient. For larger-scale factors, however, the input contains richer high-frequency content, and deeper networks can exploit this by learning more complex hierarchical features, but this increases the model size and computation required to train. The proposed adaptive-depth U-Net therefore treats the scale factor $s$ as a signal that modulates how many encoder–decoder levels are used, rather than keeping this number fixed.
+
+
+\item \textbf{Motivate why / how your solution solves the problem (technical).}
+
+This thesis addresses the limitations of fixed-depth U-Nets in two technical phases. In the first phase, a vanilla U-Net with $2 \times 2$ max pooling and a fixed number of encoder–decoder levels is used as a baseline. By systematically varying the scale factor $s$ while keeping the depth fixed, the experiments quantify how performance degrades or saturates when the architecture cannot adapt its capacity to the input resolution. This establishes the performance ceiling of a non-adaptive architecture and reveals where fixed depth is either wasteful or insufficient.
+
+In the second phase, the network depth is explicitly linked to the scale factor $s$ through an adaptive-depth design, implemented using continuous, differentiable resizing layers (such as \texttt{ResizeByScale} and \texttt{ResizeToMatch}) instead of max pooling and transposed convolutions. These interpolation-based layers preserve spatial alignment and allow feature maps to be scaled smoothly for arbitrary $s$, while the depth schedule assigns fewer levels to heavily downscaled inputs and more levels to high-detail inputs. In combination, scale-aware depth and differentiable scaling operators directly address the earlier identified problems: they reduce unnecessary feature-map collapse at small scales, allocate additional capacity where it is beneficial, and maintain stable gradient flow across varying resolutions.
+
+\item \textbf{Explain how it compares with related work.}
+
+The proposed architecture builds on three main lines of prior work: the original U-Net for biomedical segmentation, U-Net variants adapted for super-resolution, and architectures that refine pooling and skip connections. Classical U-Net papers focus on fixed-depth designs at a single resolution, and super-resolution variants typically modify loss functions or introduce residual heads, but still keep depth and scaling operators fixed across scales. Other work improves feature rescaling or skip connections (for example via interpolation-based pooling or adaptive skip pathways), yet does not explicitly couple network depth to the input scale factor. In contrast, this thesis combines a residual U-Net backbone with differentiable interpolation-based scaling layers and a scale-dependent depth schedule, and evaluates the resulting architecture jointly on super-resolution and segmentation. This positioning allows a direct comparison with fixed-depth U-Nets and existing U-Net-style super-resolution models, while highlighting the specific contribution of scale-conditioned depth as an architectural degree of freedom.
+
+\end{itemize}

@@ -1,0 +1,63 @@
+\chapter{Related Work}
+\label{chap:related-work}
+
+A crucial step in conducting thesis research is to review the existing literature and prior work on U-Net-based architectures for image super-resolution and medical image segmentation, as well as multi-scale and scale-aware deep learning methods relevant to the proposed adaptive-depth U-Net. This chapter will demonstrate awareness of the state of the art in the problem domain and position the proposed method as a novel contribution with respect to existing approaches.
+
+\section{Deep SISR}
+The earlier research work on SISR focused on very deep residual or iterative back-projection architectures, rather than U-Net-style encoder-decoders. For instance, Enhanced Deep Residual Networks for Single Image Super-Resolution(EDSR) \cite{lim2017edsr}, which introduced a highly optimized deep SR network that significantly surpassed previous state-of-the-art models. The key changes involved optimizing the conventional residual network (ResNet) architecture, primarily by removing the unnecessary Batch Normalization (BN) layers. By eliminating BN layers, the EDSR model could be substantially expanded in size (e.g., increased depth or feature channels), leading to improved quality results while maintaining manageable memory usage.  In the context of U-Net--style encoder-decoder architectures, this motivates exploring how depth and capacity can be adjusted more systematically, instead of relying on a single, fixed configuration across all tasks and scales.
+\newline
+The Deep Back-Projection Network (DBPN) by Haris et al. \cite{haris2018dbpn} introduced a fundamental architectural shift in SISR by moving away from purely feed-forward modeling to incorporate an interactive error correction mechanism. So instead of upscaling once, it goes back and forth between the LR and HR multiple times and uses the reconstruction error itself to improve the result 
+
+This addresses a major limitation in previous Deep SISR architectures, as these fail to fully account for the mutual dependencies between the low-resolution input and high-resolution output. 
+
+From the perspective of this thesis, DBPN is interesting because it treats super-resolution as a multi-stage refinement process in which each stage contributes additional capacity to correct errors between the LR and HR. However, DBPN still uses a fixed number of projection stages that does not depend on the scale factor, and its architecture is not organized as a symmetric U-Net with skip connections at multiple resolutions.
+
+\section{U-Net Architectures for Medical Image Segmentation}
+\label{sec:rw-seg-unet}
+
+
+Medical image segmentation, and skin lesion segmentation in particular,
+faces challenges such as low contrast between the lesion and the background,
+fuzzy boundaries, and large variation in lesion size and shape. The
+classical U-Net~\cite{ronneberger2015unet} addresses these issues with
+a symmetric encoder--decoder and skip connections that combine
+high-level context with fine spatial detail. Building on this baseline,
+Phan et al. propose ``Skin Lesion Segmentation by U-Net with Adaptive
+Skip Connection and Structural Awareness~\cite {phan2023skin}, which
+introduces two key architectural changes: Adaptive Skip Connections and
+a Structural Awareness Module. By integrating Selective Kernel blocks into the skip connections, the network can flexibly tune how much local versus global context it uses, depending on the lesion’s size and appearance. While auxiliary distance-map and contour predictions encourage the model to be more sensitive to lesion boundaries and global
+shape.
+
+This design can be seen as making the skip pathways of the U-Net scale-aware, improving performance on lesions of varying size, but the Overall encoder--decoder depth remains fixed. In contrast, the adaptive-depth U-Net explored in this thesis keeps the basic U-Net structure but treats the number of encoder--decoder levels as a scale-dependent design variable, focusing on how architectural depth itself should change with the lesion or image scale rather than only modifying the skip connections.
+
+\section{U-Net Architectures for Super-Resolution}
+\label{sec:rw-sr-unet}
+
+Single-image super-resolution has been studied extensively using encoder--decoder (U-net-based) architectures for SR is effective because it combines semantic context with pixel-level detail reconstruction. Early deep SR research, such as \cite{super1}, focused on parameter reduction, architecturally improved U-net, and the edge-sharpening MixGE loss function. The conclusion reached by Zhengyang Lu and Ying Chen is that it significantly improved performance compared to existing works, particularly by achieving superior reconstruction accuracy and efficiency. 
+
+
+
+
+\subsection{Single-scale Super-Resolution Architectures}
+
+Single-scale Super-Resolution Architectures are neural networks specifically designed to reconstruct a HR image from LR input at a single predetermined scale factor. Researched Architectures like SRCNN, EDSR, ESPCN are single-scale architectures as they have a constant scale factor throughout the model. 
+
+Dong et al. propose ''Image Super-Resolution Using Deep Convolution Networks '' which was early research done in apply Deep CCN to Super-Resolution(SRCNN) and SRCNN layed the foundation for deep learning approach to image super-resolution\cite{dong2015srcnn}. The orgnial SRCNN architercutre was relatively shallow. This shallow depth subsequently limited its ability to model complex patterns and restore fine textures and high-frequency details effectively. When attempting to make deeper models, the authors observed challenges with superior performance, sometimes concluding that deeper networks did not yield better results. This observation was later successfully challenged by subsequent deep SR models, such as Very Deep Super-Resolution (VDSR)\cite{kim2016vdsr}. 
+
+Shi et al. propose '' Real-Time Single Image and Video Super-Resolution Using an Efficient  Sub-Pixel Convolutional Neural Network'' which is an Efficient Sub-Pixel Convolution Neural Network (ESPCN), a resource efficient solution for single-image super-resolution designed for real-time application. ESPCN's efficiency stems from its use of sub-pixel convolution layer which is employed at the very end of the network. 
+
+
+
+\subsection{Multi-Scale Super-Resolution Architectures}
+
+Accurate Image Super-Resolution Using Very Deep CNN (VDSR), which is a very deep CNN paper that uses a 20-layer convolutional network with residual learning, trained to predict the difference between a bicubic-upsampled low-resolution input and the ground-truth high-resolution image. In \cite{kim2016vdsr} Kim et al, show that a single network can be trained jointly on multiple scale factors (e.g.\ $\times 2$, $\times 3$, $\times 4$), achieving competitive performance across scales without maintaining separate models for each one used a joint multi-scale model. However, there is a massive computational and memory cost associated with training such a model as all convolutions operate on large spatial dimensions, so FLOPs and memory usage are higher than methods that operate in LR space and only upscale at the end.
+
+
+
+% Describe: datasets (DIV2K), scale factors they target, how they handle
+% multiple scales (separate models vs. shared), and their limitations.
+
+
+\section{Summary and Research Gap}
+\label{sec:rw-summary-gap}
+

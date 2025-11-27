@@ -1,0 +1,221 @@
+\chapter{Results and Analysis}
+\label{chap:results}
+
+This chapter presents the quantitative and qualitative results of the experiments outlined in the methodology. We evaluate the performance of both the \textbf{Fixed-Depth} and \textbf{Adaptive-Depth U-Net} models against a standard Bicubic interpolation baseline. All metrics are reported on the $256 \times 256$ cropped DIV2K validation set, using a 4-pixel border shave on the luminance (Y) channel.
+
+%-----------------------------------------------------------
+\section{Experiment 1: Fixed-Depth Model Performance}
+\label{sec:results_fixed}
+
+The first experiment evaluates the performance of a U-Net with a \textbf{fixed depth of 3 levels} across all scale factors. The objective is to establish a performance baseline for a non-adaptive architecture. The results are compared against the bicubic baseline in Table \ref{tab:results_fixed_depth}.
+
+% Note: You must have \usepackage{booktabs} in your main .tex file
+\begin{table}[h!]
+    \centering
+    \caption{Quantitative Results for Fixed-Depth (3 Levels) U-Net vs. Bicubic Baseline. The $\Delta$ column shows the improvement of our model over bicubic interpolation.}
+    \label{tab:results_fixed_depth}
+    \begin{tabular}{c c | c c c | c c c | c}
+        \toprule
+        \textbf{Scale} & \textbf{Fixed} & \multicolumn{3}{c}{\textbf{PSNR (dB)}} & \multicolumn{3}{c}{\textbf{SSIM}} & \textbf{MS-SSIM} \\
+        \cmidrule(lr){3-5} \cmidrule(lr){6-8}
+        \textbf{($s$)} & \textbf{Depth} & \textbf{Bicubic} & \textbf{Model} & \textbf{$\Delta$} & \textbf{Bicubic} & \textbf{Model} & \textbf{$\Delta$} & \textbf{(Model)} \\
+        \midrule
+        0.20 & 3 & & & & & & & \\
+        0.30 & 3 & & & & & & & \\
+        0.40 & 3 & & & & & & & \\
+        0.50 & 3 & & & & & & & \\
+        0.60 & 3 & & & & & & & \\
+        0.70 & 3 & & & & & & & \\
+        0.90 & 3 & & & & & & & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\paragraph{Analysis of Fixed-Depth Results}
+(TODO: Your analysis here. Discuss the trends from Table \ref{tab:results_fixed_depth}. Note the general improvement over bicubic and any potential performance bottlenecks at extreme scales.)
+
+%-----------------------------------------------------------
+\section{Experiment 2: Adaptive-Depth Model Performance}
+\label{sec:results_adaptive}
+
+The second experiment tests the core hypothesis: that adapting the network depth based on the scale factor improves performance. Deeper networks are used for higher-detail scales, while shallower networks are used for low-detail scales. The results are shown in Table \ref{tab:results_adaptive_depth}.
+
+\begin{table}[h!]
+    \centering
+    \caption{Quantitative Results for \textbf{Adaptive-Depth U-Net} vs. Bicubic Baseline. The depth is now a function of the scale $s$.}
+    \label{tab:results_adaptive_depth}
+    \begin{tabular}{c c | c c c | c c c | c}
+        \toprule
+        \textbf{Scale} & \textbf{Adaptive} & \multicolumn{3}{c}{\textbf{PSNR (dB)}} & \multicolumn{3}{c}{\textbf{SSIM}} & \textbf{MS-SSIM} \\
+        \cmidrule(lr){3-5} \cmidrule(lr){6-8}
+        \textbf{($s$)} & \textbf{Depth} & \textbf{Bicubic} & \textbf{Model} & \textbf{$\Delta$} & \textbf{Bicubic} & \textbf{Model} & \textbf{$\Delta$} & \textbf{(Model)} \\
+        \midrule
+        0.20 & 1 & & & & & & & \\
+        0.30 & 2 & & & & & & & \\
+        0.40 & 3 & & & & & & & \\
+        0.50 & 3 & & & & & & & \\
+        0.60 & 4 & & & & & & & \\
+        0.70 & 5 & & & & & & & \\
+        0.80 & 6 & & & & & & & \\
+        0.90 & 7 & & & & & & & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\paragraph{Analysis of Adaptive-Depth Results}
+(TODO: Your analysis here. Discuss the results from Table \ref{tab:results_adaptive_depth}, focusing on the $\Delta$ vs. Bicubic improvements. Set the stage for the direct comparison in the next section.)
+
+%-----------------------------------------------------------
+\section{Comparative Analysis: Fixed vs. Adaptive Depth}
+\label{sec:results_comparison}
+
+This section provides the direct comparison to answer the primary research question. Table \ref{tab:results_comparison} consolidates the model performance from both experiments to highlight the net benefit (or cost) of the adaptive-depth strategy.
+
+\begin{table}[h!]
+    \centering
+    \caption{Direct Performance Comparison: Fixed-Depth (D=3) vs. Adaptive-Depth Model. The $\Delta$ columns represent the performance gain of the adaptive model over the fixed model.}
+    \label{tab:results_comparison}
+    \begin{tabular}{c | c c c | c c c}
+        \toprule
+        \textbf{Scale} & \multicolumn{3}{c}{\textbf{PSNR (dB)}} & \multicolumn{3}{c}{\textbf{SSIM}} \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-7}
+        \textbf{($s$)} & \textbf{Fixed (D=3)} & \textbf{Adaptive} & \textbf{$\Delta$ (Adaptive - Fixed)} & \textbf{Fixed (D=3)} & \textbf{Adaptive} & \textbf{$\Delta$ (Adaptive - Fixed)} \\
+        \midrule
+        0.20 & & & & & & \\
+        0.30 & & & & & & \\
+        0.40 & & & & & & \\
+        0.50 & & & & & & \\
+        0.60 & & & & & & \\
+        0.70 & & & & & & \\
+        0.80 & & & & & & \\
+        0.90 & & & & & & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\paragraph{Discussion of Comparative Results}
+(TODO: This is your most important analysis. Use the $\Delta$ columns in Table \ref{tab:results_comparison} to prove or disprove your hypothesis.
+\begin{itemize}
+    \item At low scales ($s \le 0.4$): Does the adaptive model win?
+    \item At high scales ($s \ge 0.6$): Does the adaptive model win?
+    \item At crossover scales ($s=0.4, 0.5$): Is the performance similar, as expected?
+\end{itemize}
+)
+%-----------------------------------------------------------
+\section{Analysis of Training Dynamics}
+\label{sec:results_training_dynamics}
+
+Beyond the final checkpoint metrics, analyzing the training and validation loss curves provides insight into model stability, convergence speed, and overfitting.
+
+\subsection{Experiment 1: Fixed-Depth Training}
+Figure \ref{fig:train_fixed} plots the validation PSNR (or loss) over training epochs for the fixed-depth (D=3) model at different scales.
+
+\begin{figure}[h!]
+    \centering
+    % TODO: Plot your training/validation curves
+    % You will need to export these from TensorBoard
+    % \includegraphics[width=0.49\linewidth]{path/to/fixed_depth_s03_loss.png}
+    % \includegraphics[width=0.49\linewidth]{path/to/fixed_depth_s07_loss.png}
+    
+    \framebox{\parbox{0.9\textwidth}{\centering
+        \vspace{5cm}
+        \textbf{Graph Placeholder: Fixed-Depth (D=3) Training Curves} \\
+        \small Plot validation PSNR (Y-axis) vs. Epoch (X-axis).
+        \newline
+        Use different colors for each scale (e.g., $s=0.3$, $s=0.5$, $s=0.7$, $s=0.9$).
+        \vspace{5cm}
+    }}
+    \caption{Validation PSNR curves for the \textbf{Fixed-Depth (D=3)} model across various scales. (You may also want a second plot showing the train/validation loss gap for a specific scale).}
+    \label{fig:train_fixed}
+\end{figure}
+
+\paragraph{Analysis of Fixed-Depth Training}
+(TODO: Your analysis here.
+\begin{itemize}
+    \item Do higher scales (e.g., 0.9) converge faster or slower?
+    \item Do they plateau at a higher or lower PSNR?
+    \item Do the low scales (e.g., 0.2, 0.3) show signs of overfitting (a large gap between training and validation loss) because the model is too complex for the simple task?)
+\end{itemize}
+)
+
+\subsection{Experiment 2: Adaptive-Depth Training}
+Figure \ref{fig:train_adaptive} shows the same plot, but for the adaptive-depth models. This compares, for example, the convergence of the $s=0.3$ (D=2) model against the $s=0.7$ (D=5) model.
+
+\begin{figure}[h!]
+    \centering
+    % TODO: Plot your training/validation curves
+    % \includegraphics[width=0.49\linewidth]{path/to/adaptive_depth_s03_loss.png}
+    % \includegraphics[width=0.49\linewidth]{path/to/adaptive_depth_s07_loss.png}
+    
+    \framebox{\parbox{0.9\textwidth}{\centering
+        \vspace{5cm}
+        \textbf{Graph Placeholder: Adaptive-Depth Training Curves} \\
+        \small Plot validation PSNR (Y-axis) vs. Epoch (X-axis).
+        \newline
+        Use different colors for each scale/depth pair (e.g., $s=0.3/D=2$, $s=0.5/D=3$, $s=0.7/D=5$).
+        \vspace{5cm}
+    }}
+    \caption{Validation PSNR curves for the \textbf{Adaptive-Depth} models across various scales.}
+    \label{fig:train_adaptive}
+\end{figure}
+
+\paragraph{Analysis of Adaptive-Depth Training}
+(TODO: Your analysis here.
+\begin{itemize}
+    \item How do these curves compare to the fixed-depth ones in Figure \ref{fig:train_fixed}?
+    \item Does the $s=0.3$ (D=2) model show a smaller validation gap than the $s=0.3$ (D=3) model from the first experiment (suggesting less overfitting)?
+    \item Does the $s=0.7$ (D=5) model converge to a higher validation PSNR than the $s=0.7$ (D=3) model?
+    \item Are the training curves generally more stable?)
+\end{itemize}
+)
+%-----------------------------------------------------------
+\section{Qualitative Results (Visual Comparison)}
+\label{sec:results_qualitative}
+
+Quantitative metrics provide an objective measure of error, but qualitative (visual) inspection is necessary to assess perceptual quality, such as texture reconstruction and artifact suppression. Figures \ref{fig:qual_low_scale} and \ref{fig:qual_high_scale} show visual comparisons on selected patches from the validation set.
+
+% You will need to \usepackage{graphicx} in your main .tex file
+
+\begin{figure}[h!]
+    \centering
+    % TODO: Create a 1x5 grid of your output images
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s03_lr_input.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s03_bicubic.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s03_fixed.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s03_adaptive.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s03_hr.png}
+    
+    % Placeholder for now
+    \framebox{\parbox{0.9\textwidth}{\centering
+        \vspace{5cm}
+        \textbf{Image Placeholder: Low-Scale (e.g., $s=0.3$)} \\
+        \small (a) LR Input \quad (b) Bicubic \quad (c) Fixed-Depth (D=3) \quad (d) Adaptive-Depth (D=2) \quad (e) Ground Truth
+        \vspace{5cm}
+    }}
+    
+    \caption{Visual comparison on a low-detail scale ($s=0.3$).}
+    \label{fig:qual_low_scale}
+\end{figure}
+
+\begin{figure}[h!]
+    \centering
+    % TODO: Create a 1x5 grid of your output images
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s07_lr_input.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s07_bicubic.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s07_fixed.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s07_adaptive.png}
+    % \includegraphics[width=0.19\linewidth]{path/to/img_s07_hr.png}
+    
+    \framebox{\parbox{0.9\textwidth}{\centering
+        \vspace{5cm}
+        \textbf{Image Placeholder: High-Scale (e.g., $s=0.7$)} \\
+        \small (a) LR Input \quad (b) Bicubic \quad (c) Fixed-Depth (D=3) \quad (d) Adaptive-Depth (D=5) \quad (e) Ground Truth
+        \vspace{5cm}
+    }}
+    
+    \caption{Visual comparison on a high-detail scale ($s=0.7$).}
+    \label{fig:qual_high_scale}
+\end{figure}
+
+\paragraph{Analysis of Qualitative Results}
+(TODO: Discuss the visual evidence from your figures. Point to specific areas (e.g., "in Figure \ref{fig:qual_high_scale} (d), the textures..."). Explain *how* the visual results support the quantitative findings in your tables.)

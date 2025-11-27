@@ -1,0 +1,71 @@
+\documentclass[11pt,a4paper]{report}
+ \usepackage{booktabs}
+\usepackage{url}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{rutitlepage}
+\usepackage{amsmath}
+\usepackage{hyperref} 
+\geometry{
+    a4paper,
+    top=2.5cm,        % Top margin
+    bottom=2.5cm,     % Bottom margin
+    left=2.5cm,       % Left margin
+    right=2.5cm,      % Right margin
+    headheight=14pt % Required for headers
+}
+% --- ADD THIS SECTION TO FIX CHAPTER SPACING ---
+\usepackage{titlesec}
+
+% Set spacing: {command}{left}{before}{after}
+% We set the 'before' (top) spacing to 0pt.
+\titlespacing*{\chapter}{0pt}{0pt}{40pt} 
+
+% Optional: Control the title format
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}
+  {\chaptername\ \thechapter}
+  {20pt}
+  {\Huge}
+% --- END OF NEW SECTION ---
+
+\setlength{\extrarowheight}{3pt} %for superscripts in tabular
+\setlength{\arraycolsep}{4pt}
+\lstset{basicstyle = \footnotesize, breaklines = true}
+
+\begin{document}
+
+\maketitleru[
+  layout=traditional,
+	authors={Kunal Narwani\\s1102120},
+	date={\today},
+	others={%
+		{First supervisor/assessor:}{Title Twan van Laarhoven},
+		{Second assessor:}{Title Gabriel Bucur}},
+	course={Bachelor's Thesis Computing Science},
+	title={Thesis Title},
+	subtitle={Subtitle if you like},
+]
+
+
+\input{abstract}
+
+\tableofcontents
+
+\input{introduction}
+\input{preliminaries}
+\input{relatedwork}
+\input{Methodology}
+\input{Results}
+\input{LaTeX_ThesisEnglish/discussion_&_limintations}
+\input{conclusions}
+
+\bibliographystyle{plain}
+\bibliography{bibliography}
+
+\appendix
+\input{appendix}
+
+\end{document}
