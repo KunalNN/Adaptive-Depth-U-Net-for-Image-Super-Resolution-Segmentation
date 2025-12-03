@@ -8,6 +8,10 @@ out-of-the-box, while still allowing overrides through CLI arguments.
 
 import argparse
 import sys
+import time
+import csv
+import os
+import numpy as np
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
@@ -97,6 +101,78 @@ def dice_coefficient(y_true: tf.Tensor, y_pred: tf.Tensor, smooth: float = 1e-6)
     numerator = 2.0 * tf.reduce_sum(y_true * y_pred) + smooth
     denominator = tf.reduce_sum(y_true + y_pred) + smooth
     return numerator / denominator
+
+
+def iou_score(y_true: tf.Tensor, y_pred: tf.Tensor, smooth: float = 1e-6) -> tf.Tensor:
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    intersection = tf.reduce_sum(y_true * y_pred)
+    union = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred) - intersection
+    return (intersection + smooth) / (union + smooth)
+
+
+class CSVLoggerWithTime(tf.keras.callbacks.Callback):
+    def __init__(self, filename, separator=',', append=False):
+        super().__init__()
+        self.filename = filename
+        self.separator = separator
+        self.append = append
+        self.file = None
+        self.writer = None
+        self.keys = None
+        self.start_time = None
+
+    def on_train_begin(self, logs=None):
+        if self.append:
+            if os.path.exists(self.filename):
+                with open(self.filename, 'r' + ('b' if sys.version_info[0] < 3 else ''), newline='') as f:
+                    self.keys = [k for k in csv.reader(f, delimiter=self.separator)][0]
+            mode = 'a'
+        else:
+            mode = 'w'
+        
+        # Open file
+        self.file = open(self.filename, mode, newline='')
+        self.writer = csv.writer(self.file, delimiter=self.separator)
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.start_time = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        end_time = time.time()
+        duration = end_time - self.start_time
+        
+        # Add custom metrics
+        logs['wall_time'] = duration
+        logs['step'] = epoch + 1 # 1-based step/epoch
+        
+        def handle_value(k):
+            is_zero_dim_ndarray = isinstance(k, np.ndarray) and k.ndim == 0
+            if isinstance(k, str):
+                return k
+            elif isinstance(k, Iterable) and not is_zero_dim_ndarray:
+                return '"[%s]"' % (', '.join(map(str, k)))
+            else:
+                return k
+
+        if self.keys is None:
+            self.keys = sorted(logs.keys())
+            # Ensure wall_time and step are in the header if not already (though sorted handles it)
+            # But let's put epoch/step first if we want specific order, but sorted is fine.
+            
+            if not self.append:
+                self.writer.writerow(self.keys)
+
+        row_dict = logs
+        row = [handle_value(row_dict.get(key, '')) for key in self.keys]
+        self.writer.writerow(row)
+        self.file.flush()
+
+    def on_train_end(self, logs=None):
+        if self.file:
+            self.file.close()
+
 
 
 def _canonical_key(path: Path) -> str:
@@ -268,17 +344,31 @@ def train(args: argparse.Namespace) -> None:
         tf.keras.metrics.Precision(name="precision"),
         tf.keras.metrics.Recall(name="recall"),
         dice_coefficient,
+        iou_score,
     ]
     model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
 
+    # Setup logging
+    
+    # Determine log directory
+    # If user provided a specific path in request, we might want to use it, but here we stick to args.model_dir or a 'logs' subdir
+    # The user requested: /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Segmenation/logs/log_vinillia
+    # We will use args.model_dir as the base. If the user passes that path as model_dir, it works.
+    
     args.model_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = args.model_dir / f"{args.run_name}_best.keras"
+    log_file = args.model_dir / "training_log.csv"
+    eval_file = args.model_dir / "evaluation.csv"
+
     print(f"Checkpoints will be written to {checkpoint_path}")
+    print(f"Training logs will be written to {log_file}")
+    print(f"Evaluation results will be written to {eval_file}")
 
     callbacks = [
         ModelCheckpoint(filepath=str(checkpoint_path), monitor="val_dice_coefficient", mode="max", save_best_only=True, save_weights_only=False, verbose=1),
         EarlyStopping(monitor="val_dice_coefficient", patience=10, mode="max", restore_best_weights=True, verbose=1),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6, verbose=1),
+        CSVLoggerWithTime(str(log_file)),
     ]
 
     model.fit(
@@ -291,6 +381,18 @@ def train(args: argparse.Namespace) -> None:
 
     final_path = args.model_dir / f"{args.run_name}_final.keras"
     model.save(final_path)
+
+    # Evaluation
+    print("Evaluating on validation set...")
+    eval_metrics = model.evaluate(val_ds, verbose=1, return_dict=True)
+    
+    # Save evaluation to CSV
+    with open(eval_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(eval_metrics.keys())
+        writer.writerow(eval_metrics.values())
+    
+    print(f"Evaluation saved to {eval_file}")
 
 
 if __name__ == "__main__":
