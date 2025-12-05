@@ -1,0 +1,11 @@
+{
+  "mse_mean": 0.00295010135610454,
+  "mse_std": 0.003932344952794109,
+  "psnr_mean": Infinity,
+  "psnr_std": NaN,
+  "ssim_mean": 0.735698189000377,
+  "ssim_std": 0.1823854971707932,
+  "msssim_mean": 0.91881328130378,
+  "msssim_std": 0.06396569186968068,
+  "samples": 3598
+}
