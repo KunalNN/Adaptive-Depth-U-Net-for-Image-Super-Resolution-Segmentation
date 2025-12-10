@@ -1,0 +1,97 @@
+\chapter{Results and Analysis}
+\label{chap:results}
+
+This chapter presents the quantitative and qualitative results of the experiments outlined in the methodology. We evaluate the performance of both the fixed-depth and adaptive-depth U-Net models on two distinct tasks: Single-Image Super-Resolution (SISR) and Skin Lesion Segmentation. Furthermore, we analyze the computational costs associated with each architecture to determine the trade-off between performance gain and resource usage. Finally, we discuss the limitations of the data gathering process and the implications of these results for the research questions.
+
+\section{Super-Resolution}
+
+    \subsection{Experiment 1: Fixed-Depth Model Performance}
+    % Focus: Establishing the baseline
+
+        \subsubsection{Training and Validation Analysis}
+
+        From the observation of Figure \ref{fig:Exp_1_training_loss}, we can see that for all scales, the models undergo a rapid initial learning phase where the model quickly learns the coarse features of the super-resolution task. Subsequently, the curves exhibit noise and fluctuating patterns, which are characteristic of stochastic optimization methods like SGD or Adam. A similar but inverse trend is observed in Figure \ref{fig:Exp_1_training_psnr}, where the PSNR increases over time.
+
+        Comparing across scales, the models appear to achieve slightly better initial training convergence for higher scales compared to lower scales. This suggests that the task is slightly easier at higher scales, or that the fixed model capacity is better suited for the problem set of super-resolution at those resolutions.
+
+        As per the training loss and PSNR, the models do not show signs of overfitting, as the loss continues to decrease or stabilize throughout the majority of the training duration. The fluctuating patterns visible in the later stages of training are likely attributed to the smaller batch sizes required for higher scales due to hardware limitations. Furthermore, several low scales show consistent trends with slight offsets, suggesting that the underlying dynamics are stable across these different inputs, with the offset caused by the difference in model capacity relative to the input detail.
+
+        \begin{figure}[t]
+            \centering
+            \includegraphics[width=\textwidth]{LaTeX_ThesisEnglish/Images/Exp_1_training_loss.png}
+            \caption{Experiment 1 Training Loss. A sharp decrease is visible during the first 5 epochs. Scale 0.2 starts with the highest initial loss (0.0185) while 0.9 starts with the lowest (0.0155), a difference in the range of 0.00004. The models slowly converge towards a loss value of approximately $0.0150 \pm 0.02$ after 60 epochs.}
+            \label{fig:Exp_1_training_loss}  
+        \end{figure}
+
+        \begin{figure}[t]
+            \centering
+            \includegraphics[width=\textwidth]{LaTeX_ThesisEnglish/Images/Exp_1_training_psnr.png}
+            \caption{Experiment 1 Training PSNR. The inverse trend of the loss function is observed here. Scales 0.2, 0.3, and 0.4 show particularly consistent trends with only slight y-axis offsets.}
+            \label{fig:Exp_1_training_psnr}  
+        \end{figure}
+
+
+        \subsubsection{Evaluation on Test Set}
+        % Include: Table of PSNR and SSIM scores across scales 0.2 - 0.9.
+        % Qualitative: Show visual examples of "smudged" details at low scales.
+
+        We can see from \ref{Exp_1_val_loss} that there is a moderate rate of decrease in loss for all scale, which is a common trend when comparing training to validation loss curves. We also can see a similar tread when looking to the intitail loss values where the lower scale start off with a higher loss value and higher scale with the lower loss value.  
+        
+        % \begin{figure}[t]
+        %     \centering
+        %     \includegraphics[width=\textwidth]{LaTeX_ThesisEnglish/Images/Exp_1_val_loss.png}
+        %     \caption{Experiment 1 Validation loss}
+        %     \label{fig:Exp_1_val_loss}  
+        % \end{figure}
+
+        
+
+        \subsubsection{Computational Cost Analysis}
+        % Include: Average inference time per image and memory usage.
+
+    \subsection{Experiment 2: Adaptive-Depth Model Performance}
+    % Focus: The core contribution [cite: 378]
+        \subsubsection{Training and Validation Analysis}
+        % Include: Loss curves. Did deeper networks (at high scales) take longer to converge?
+
+        \subsubsection{Evaluation on Test Set}
+        % Include: Table of PSNR/SSIM. 
+        % Qualitative: Show visual examples where Adaptive Depth preserved details better than Fixed.
+
+        \subsubsection{Computational Cost and Parameter Comparison}
+        % Include: Parameter counts for the different depth configurations (levels 1-5)[cite: 382].
+
+    \subsection{Experiment 1 vs Experiment 2}
+    % CRITICAL SECTION: Direct comparison.
+    % Graph: Plot PSNR (y-axis) vs Scale (x-axis) for both Fixed and Adaptive models.
+    % Discussion: Where does Adaptive win? (Likely at extremes). Where are they similar?
+
+\section{Segmentation}
+
+    \subsection{Experiment 1: Fixed-Depth Model Performance}
+    % Focus: Baseline with 4 levels, ~31M parameters [cite: 467]
+        \subsubsection{Training and Validation Analysis}
+        % Include: Dice Loss and BCE Loss curves.
+
+        \subsubsection{Evaluation}
+        % Include: Mean Dice and IoU scores on the 600 test images[cite: 493].
+        % Visuals: Input image vs. Ground Truth vs. Predicted Mask.
+
+        \subsubsection{Computational Cost Analysis}
+        % Include: Training time per epoch.
+
+    \subsection{Experiment 2: Adaptive-Depth Model Performance}
+    % Focus: Varing depth (1-5) to maintain bottleneck size 5x5 - 25x25 [cite: 479]
+        \subsubsection{Training and Validation Analysis}
+        % Note: Mention the observation from your PDF that "adaptive models were taking much longer to train".
+
+        \subsubsection{Evaluation}
+        % Include: Dice/IoU scores across the scales 0.2 - 0.8.
+
+        \subsubsection{Computational Cost and Parameter Comparison}
+        % Include: Table showing how depth reduction at low scales saved memory/time.
+
+    \subsection{Experiment 1 vs Experiment 2}
+    % ADDED THIS SECTION
+    % Compare the "Hybrid Loss" performance. 
+    % Discuss the trade-off: Did the extra training time for Adaptive translate to significantly better IoU?

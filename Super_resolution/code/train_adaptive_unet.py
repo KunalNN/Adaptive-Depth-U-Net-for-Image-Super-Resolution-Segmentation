@@ -300,9 +300,9 @@ def build_dataset(
 
 def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
     # Make nf a trainable parameter for the Unet (maybe in future)
-    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs) # Conv2D with 3x3 kernel with nf number of filters
-    x = L.LayerNormalization(axis=-1)(x) # LayerNorm over channels
-    x = L.Activation("relu")(x) # ReLU activation
+    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs)
+    x = L.LayerNormalization(axis=-1)(x)
+    x = L.Activation("relu")(x)
 
     # Running this twice deepens the receptive field and injects nonlinearity while keeping spatial size unchanged
     x = L.Conv2D(nf, 3, padding="same", use_bias=True)(x) 
@@ -335,8 +335,7 @@ def build_super_resolution_unet(
     up_layer = ResizeToMatch(name="dec_up") # upsamples to a skip-connection’s size in the decoder 
 
     # Low-resolution RGB enters here, decoder will reuse stored skips.
-    inputs = Input(shape=(input_size, input_size, 3), name="low_res_input") 
-    # when calling Input(), it creates a placeholder tensor that represents the input data for the model
+    inputs = Input(shape=(input_size, input_size, 3), name="low_res_input")
 
     skips: List[tf.Tensor] = []
     x = inputs
@@ -700,7 +699,7 @@ def train(args: argparse.Namespace) -> None:
 
     custom_dir = Path(run_dir) / "custom"
     custom_dir.mkdir(parents=True, exist_ok=True)
-    writer = tf.summary.create_file_writer(str(custom_dir))  # << not run_dir
+    writer = tf.summary.create_file_writer(str(custom_dir))
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(
         log_dir=str(run_dir),      # Keras will write to run_dir/train and run_dir/validation
@@ -708,7 +707,7 @@ def train(args: argparse.Namespace) -> None:
         write_graph=False,
         write_images=False,
         profile_batch=0,
-        update_freq='epoch',       # make it explicit
+        update_freq='epoch',
     )
 
     backup_dir = run_dir / "train_backup"
@@ -886,42 +885,10 @@ def train(args: argparse.Namespace) -> None:
                             # Synthesize LR
                             h, w = hr_image.shape[0], hr_image.shape[1]
                             
-                            # Crop to be multiple of scale if needed? 
-                            # The model architecture (U-Net) with resizing might require specific input sizes 
-                            # if not fully convolutional/adaptive. 
-                            # But our model uses ResizeByScale, so it should handle any size 
-                            # as long as it's not too small for the depth.
-                            
-                            # Let's just run on the full image.
+            
+                
                             lr_image = degrade_to_lr_tf(hr_image, args.scale, h) # This function name is slightly misleading, it returns degraded then upsampled? 
-                            # Wait, degrade_to_lr_tf in this script:
-                            # resized = tf.image.resize(hr_image, [down_size, down_size], ...)
-                            # restored = tf.image.resize(resized, [output_size, output_size], ...)
-                            # It returns the "restored" (upsampled) image? No, wait.
-                            # Let's check degrade_to_lr_tf implementation.
-                            # It returns "restored" which is LR resized back to HR size (bicubic upsampling usually).
-                            # BUT the model expects LR input. 
-                            # The model input shape is (None, None, 3) usually?
-                            # Let's check model input. Input(shape=(input_size, input_size, 3)).
-                            # If we use fully convolutional, we can pass (None, None, 3).
-                            # But build_super_resolution_unet takes input_size.
-                            
-                            # If the model was built with fixed input_size (256), we might need to tile.
-                            # However, Keras models can often handle variable input size if built with (None, None, 3).
-                            # The script uses `input_size=hr_size` (256).
-                            # Let's rebuild the model with (None, None, 3) for evaluation?
-                            # Or just use the existing model and hope it accepts variable size.
-                            # If not, we MUST use tiling.
-                            
-                            # Given the user said "passed proper like cropped", they might expect tiling.
-                            # The `make_eval_patch_dataset` does tiling.
-                            # Let's use `make_eval_patch_dataset` for each image individually to get per-image metrics.
-                            
-                            # Actually, let's try to run on the full image first if it fits. 
-                            # If the model has fixed input shape, it will fail.
-                            # But `make_eval_patch_dataset` is safer.
-                            
-                            # Re-using make_eval_patch_dataset for a single image list
+
                             ds, _, _ = make_eval_patch_dataset(
                                 [img_path],
                                 patch_size=patch_size,

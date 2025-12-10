@@ -45,9 +45,9 @@ AUTOTUNE = tf.data.AUTOTUNE
 
 def conv_block(inputs: tf.Tensor, nf: int) -> tf.Tensor:
     # Make nf a trainable parameter for the Unet (maybe in future)
-    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs) # Conv2D with 3x3 kernel with nf number of filters
-    x = L.LayerNormalization(axis=-1)(x) # LayerNorm over channels
-    x = L.Activation("relu")(x) # ReLU activation
+    x = L.Conv2D(nf, 3, padding="same", use_bias=True)(inputs)
+    x = L.LayerNormalization(axis=-1)(x)
+    x = L.Activation("relu")(x)
 
     # Running this twice deepens the receptive field and injects nonlinearity while keeping spatial size unchanged
     x = L.Conv2D(nf, 3, padding="same", use_bias=True)(x) 
@@ -351,9 +351,6 @@ def train(args: argparse.Namespace) -> None:
     # Setup logging
     
     # Determine log directory
-    # If user provided a specific path in request, we might want to use it, but here we stick to args.model_dir or a 'logs' subdir
-    # The user requested: /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Segmenation/logs/log_vinillia
-    # We will use args.model_dir as the base. If the user passes that path as model_dir, it works.
     
     args.model_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = args.model_dir / f"{args.run_name}_best.keras"
