@@ -103,12 +103,13 @@ class CustomCSVLogger(Callback):
         
         # Write headers if files are empty/new
         if self.train_file.tell() == 0:
-            self.train_writer.writerow(['Wall time', 'Step'] + list(train_logs.keys()))
+            # Notebook expects 'epoch', so we rename 'Step' to 'epoch'
+            self.train_writer.writerow(['Wall time', 'epoch'] + list(train_logs.keys()))
             self.train_file.flush()
         
         if self.val_file.tell() == 0 and val_logs:
             # Remove 'val_' prefix for cleaner headers if desired, or keep it
-            headers = ['Wall time', 'Step'] + list(val_logs.keys())
+            headers = ['Wall time', 'epoch'] + list(val_logs.keys())
             self.val_writer.writerow(headers)
             self.val_file.flush()
 
@@ -125,6 +126,9 @@ class CustomCSVLogger(Callback):
             self.train_file.close()
         if self.val_file:
             self.val_file.close()
+
+
+
 
 class EpochTimingCallback(Callback):
     """
@@ -718,8 +722,8 @@ def train(args: argparse.Namespace) -> None:
     backup_dir = run_dir / "train_backup"
 
     custom_csv_logger = CustomCSVLogger(
-        train_log_path=run_dir / f"runs_scale_{args.scale}.csv",
-        val_log_path=run_dir / f"validation_scale_{args.scale}.csv"
+        train_log_path=run_dir / "epoch_metrics.csv",
+        val_log_path=run_dir / "val_metrics.csv"
     )
     
     epoch_timer = EpochTimingCallback(
@@ -750,6 +754,18 @@ def train(args: argparse.Namespace) -> None:
     print("Training complete.")
     print(f"Model info: {info}")
     print(f"Checkpoint saved to: {ckpt_path}")
+
+    # Save model size info
+    total_params = model.count_params()
+    # Assuming float32 (4 bytes per param)
+    size_mb = (total_params * 4) / (1024 * 1024)
+    
+    model_size_path = run_dir / "model_size.csv"
+    with open(model_size_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Scale", "Params", "Size_MB"])
+        writer.writerow([args.scale, total_params, size_mb])
+    print(f"Model size saved to: {model_size_path}")
 
     eval_targets: List[Tuple[str, tf.data.Dataset]] = []
     if val_paths:

@@ -257,7 +257,7 @@ def plot_comparisons(data_dir1, data_dir2):
     ax2.grid(True, linestyle='--', alpha=0.2, axis='y')
     
     plt.tight_layout()
-    plt.savefig('comparison_plots.pdf')
+    plt.savefig('plots/comparison_plots.pdf')
     print("Saved comparison_plots.pdf")
     plt.close()
 
@@ -285,7 +285,7 @@ def plot_model_size(csv_path):
         for x, y in zip(df['Scale'], df['Size_MB']):
             plt.annotate(f'{y:.1f} MB', (x, y), textcoords="offset points", xytext=(0,10), ha='center')
             
-        plt.savefig('model_size_vs_scale.pdf')
+        plt.savefig('plots/model_size_vs_scale.pdf')
         print("Saved model_size_vs_scale.pdf")
         plt.close()
     except Exception as e:

@@ -1,289 +1,185 @@
-#!/usr/bin/env python3
-"""Offline evaluation for adaptive-depth U-Net checkpoints."""
+"""
+Evaluate a trained Super-Resolution model on standard test datasets (Set14, Urban100).
+"""
+import sys
+from pathlib import Path
 
-from __future__ import annotations
+# Add project root to sys.path to allow imports from shared
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import argparse
 import csv
 import glob
-import json
-from dataclasses import asdict, dataclass
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
-
+import os
 import numpy as np
 import tensorflow as tf
-import sys
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "experiments" / "experiment_1_constant_depth_3" / "Evalulation"
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.append(str(PROJECT_ROOT))
-parent_root = PROJECT_ROOT.parent
-if str(parent_root) not in sys.path:
-    sys.path.append(str(parent_root))
-
-from dataset_paths import HR_TRAIN_DIR, HR_VALID_DIR  # noqa: E402
-from shared.pipeline import make_eval_patch_dataset, sorted_alphanumeric  # noqa: E402
-from train_adaptive_unet import (  # noqa: E402
-    build_super_resolution_unet,
+import cv2
+from shared.custom_layers import (
+    ClippedResidualAdd,
+    ResizeByScale,
+    ResizeToMatch,
+    estimate_bottleneck_size,
+    custom_depth_from_scale,
+)
+from shared.pipeline import (
+    load_rgb_image_full,
+    degrade_image,
     rgb_to_luma_bt601,
 )
 
+# Disable JIT for Resize ops
+tf.config.optimizer.set_jit(False)
 
-@dataclass
-class EvalResults:
-    mse_mean: float
-    mse_std: float
-    psnr_mean: float
-    psnr_std: float
-    ssim_mean: float
-    ssim_std: float
-    msssim_mean: float
-    msssim_std: float
-    samples: int
-
-
-def infer_eval_shave(scale: float, explicit: int | None) -> int:
-    if explicit is not None:
-        return max(0, int(explicit))
-    inv_scale = 1.0 / scale if scale > 0 else 0.0
-    scale_factor = int(round(inv_scale)) if inv_scale > 0 else 0
-    return 2 * scale_factor if scale_factor > 0 else 0
-
-
-def load_checkpoint_model(
-    model_path: Path,
-    scale: float,
-    patch_size: int,
-    depth_override: int | None,
-) -> tf.keras.Model:
-    from shared.custom_layers import ClippedResidualAdd, ResizeByScale, ResizeToMatch  # noqa: E402
-
-    custom_objects = {
-        "ClippedResidualAdd": ClippedResidualAdd,
-        "ClipAdd": ClippedResidualAdd,  # legacy checkpoints
-        "ResizeByScale": ResizeByScale,
-        "ResizeToMatch": ResizeToMatch,
-    }
-    try:
-        return tf.keras.models.load_model(
-            model_path,
-            custom_objects=custom_objects,
-            compile=False,
-            safe_mode=False,
-        )
-    except ValueError as exc:
-        if "Layer node index out of bounds" not in str(exc):
-            raise
-        print(
-            "[warn] load_model failed due to stale serialized graph; rebuilding "
-            "the architecture and loading weights instead."
-        )
-        model, _ = build_super_resolution_unet(
-            scale=scale,
-            input_size=patch_size,
-            depth_override=depth_override,
-        )
-        model.load_weights(model_path)
-        return model
-
-
-def evaluate(
-    model: tf.keras.Model,
-    dataset: tf.data.Dataset,
-    eval_shave: int,
-) -> Tuple[EvalResults, List[Dict[str, float]]]:
-    psnr_vals: List[np.ndarray] = []
-    ssim_vals: List[np.ndarray] = []
-    msssim_vals: List[np.ndarray] = []
-    mse_vals: List[np.ndarray] = []
-    per_image: List[Dict[str, float]] = []
-
-    offset = 0
-    for lr_batch, hr_batch in dataset:
-        pred_rgb = model(lr_batch, training=False)
-        pred_rgb = tf.cast(tf.clip_by_value(pred_rgb, 0.0, 1.0), tf.float32)
-        hr_rgb = tf.cast(hr_batch, tf.float32)
-
-        pred_y = rgb_to_luma_bt601(pred_rgb)
-        hr_y = rgb_to_luma_bt601(hr_rgb)
-
-        if eval_shave > 0:
-            pred_y = pred_y[:, eval_shave:-eval_shave, eval_shave:-eval_shave, :]
-            hr_y = hr_y[:, eval_shave:-eval_shave, eval_shave:-eval_shave, :]
-
-        batch_psnr = tf.image.psnr(hr_y, pred_y, max_val=1.0).numpy()
-        batch_ssim = tf.image.ssim(hr_y, pred_y, max_val=1.0).numpy()
-        batch_msssim = tf.image.ssim_multiscale(hr_y, pred_y, max_val=1.0).numpy()
-        batch_mse = tf.reduce_mean(tf.square(hr_y - pred_y), axis=[1, 2, 3]).numpy()
-
-        psnr_vals.append(batch_psnr)
-        ssim_vals.append(batch_ssim)
-        msssim_vals.append(batch_msssim)
-        mse_vals.append(batch_mse)
-
-        for i in range(len(batch_psnr)):
-            per_image.append(
-                {
-                    "index": offset + i,
-                    "psnr_y": float(batch_psnr[i]),
-                    "ssim_y": float(batch_ssim[i]),
-                    "msssim_y": float(batch_msssim[i]),
-                    "mse_y": float(batch_mse[i]),
-                }
-            )
-        offset += len(batch_psnr)
-
-    if not psnr_vals:
-        raise RuntimeError("Evaluation dataset yielded no samples.")
-
-    def stats(values: List[np.ndarray]) -> Tuple[float, float]:
-        arr = np.concatenate(values, axis=0).astype(np.float64)
-        return float(np.mean(arr)), float(np.std(arr))
-
-    mse_mean, mse_std = stats(mse_vals)
-    psnr_mean, psnr_std = stats(psnr_vals)
-    ssim_mean, ssim_std = stats(ssim_vals)
-    msssim_mean, msssim_std = stats(msssim_vals)
-
-    summary = EvalResults(
-        mse_mean=mse_mean,
-        mse_std=mse_std,
-        psnr_mean=psnr_mean,
-        psnr_std=psnr_std,
-        ssim_mean=ssim_mean,
-        ssim_std=ssim_std,
-        msssim_mean=msssim_mean,
-        msssim_std=msssim_std,
-        samples=len(per_image),
-    )
-    return summary, per_image
-
-
-def attach_filenames(per_image: List[Dict[str, float]], filenames: Sequence[str]) -> None:
-    if len(per_image) != len(filenames):
-        raise ValueError("Per-image metric count does not match filename list.")
-    for item, name in zip(per_image, filenames):
-        item["filename"] = name
-
-
-def write_outputs(
-    run_dir: Path,
-    summary: EvalResults,
-    per_image: List[Dict[str, float]],
-    config: Dict[str, object],
-    write_per_image: bool,
-) -> None:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.json").write_text(json.dumps(config, indent=2))
-    (run_dir / "metrics.json").write_text(json.dumps(asdict(summary), indent=2))
-    if write_per_image:
-        csv_path = run_dir / "per_image_metrics.csv"
-        with csv_path.open("w", newline="") as handle:
-            fieldnames = ["index", "filename", "psnr_y", "ssim_y", "msssim_y", "mse_y"]
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in per_image:
-                writer.writerow(row)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate a trained adaptive-depth U-Net checkpoint.")
-    parser.add_argument("--model-path", type=Path, required=True, help="Path to the saved .keras or .h5 checkpoint.")
-    parser.add_argument("--scale", type=float, required=True, help="Downscale factor used during training (0 < scale < 1).")
-    parser.add_argument("--hr-dir", type=Path, default=Path(HR_VALID_DIR), help="Directory of high-resolution images to evaluate.")
-    parser.add_argument("--patch-size", type=int, default=256, help="Patch size (matches training crops).")
-    parser.add_argument(
-        "--eval-stride",
-        type=int,
-        default=None,
-        help="Stride used when tiling evaluation patches (default: patch size).",
-    )
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--limit", type=int, default=None, help="Optionally limit the number of evaluation samples.")
-    parser.add_argument("--eval-shave", type=int, default=None, help="Crop border pixels before metrics (mirrors training logic).")
-    parser.add_argument("--depth-override", type=int, default=None, help="Force a specific encoder depth when rebuilding the model.")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Directory to store evaluation reports.")
-    parser.add_argument("--run-name", type=str, default=None, help="Optional folder name inside --output-dir.")
-    parser.add_argument("--skip-per-image", action="store_true", help="Do not write per-patch CSV metrics.")
-    parser.add_argument("--use-train-split", action="store_true", help="Evaluate against the training split defaults instead of validation.")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate SR model on test datasets.")
+    parser.add_argument("--model_path", type=str, required=True, help="Path to the trained .keras model.")
+    parser.add_argument("--test_data_dir", type=str, required=True, help="Root directory containing test datasets (Set14, Urban100).")
+    parser.add_argument("--scale", type=float, required=True, help="Scale factor used for training/evaluation.")
+    parser.add_argument("--output_csv", type=str, required=True, help="Path to save the evaluation summary CSV.")
+    parser.add_argument("--shave", type=int, default=None, help="Pixels to shave off borders (default: scale-dependent).")
     return parser.parse_args()
 
+def evaluate_dataset(model, dataset_name, dataset_path, scale, shave):
+    """
+    Evaluates the model on a single dataset.
+    Returns a list of dictionaries containing metrics for each image.
+    """
+    print(f"Evaluating on {dataset_name} from {dataset_path}...")
+    image_extensions = ['*.png', '*.jpg', '*.jpeg', '*.bmp']
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(dataset_path, ext)))
+    
+    if not image_files:
+        print(f"[warn] No images found in {dataset_path}")
+        return []
 
-def main() -> None:
+    results = []
+    
+    for img_path in sorted(image_files):
+        try:
+            # Load HR image
+            hr_image = load_rgb_image_full(img_path) # (H, W, 3)
+            h, w = hr_image.shape[:2]
+            
+            # Degrade to LR
+            lr_image = degrade_image(hr_image, scale, output_size=-1) # (h_lr, w_lr, 3)
+            
+            # Prepare for prediction (add batch dim)
+            lr_batch = np.expand_dims(lr_image, axis=0)
+            
+            # Predict
+            pred_rgb = model.predict(lr_batch, verbose=0)
+            pred_rgb = np.clip(pred_rgb[0], 0.0, 1.0)
+            
+            # Convert to Y channel (Luma)
+            hr_y = rgb_to_luma_bt601(tf.cast(hr_image, tf.float32)).numpy()
+            pred_y = rgb_to_luma_bt601(tf.cast(pred_rgb, tf.float32)).numpy()
+            
+            # Shave borders
+            if shave > 0:
+                hr_y = hr_y[shave:-shave, shave:-shave, :]
+                pred_y = pred_y[shave:-shave, shave:-shave, :]
+                
+            # Compute Metrics
+            psnr = tf.image.psnr(hr_y, pred_y, max_val=1.0).numpy()
+            ssim = tf.image.ssim(hr_y, pred_y, max_val=1.0).numpy()
+            mse = np.mean((hr_y - pred_y) ** 2)
+            
+            results.append({
+                'Dataset': dataset_name,
+                'Filename': Path(img_path).name,
+                'PSNR': float(psnr),
+                'SSIM': float(ssim),
+                'MSE': float(mse)
+            })
+            
+        except Exception as e:
+            print(f"[error] Failed to evaluate {img_path}: {e}")
+            
+    return results
+
+def main():
     args = parse_args()
+    
+    if not os.path.exists(args.model_path):
+        print(f"[error] Model not found: {args.model_path}")
+        sys.exit(1)
+        
+    print(f"Loading model from {args.model_path}...")
+    try:
+        model = tf.keras.models.load_model(args.model_path, custom_objects={
+            'ClippedResidualAdd': ClippedResidualAdd,
+            'ResizeByScale': ResizeByScale,
+            'ResizeToMatch': ResizeToMatch
+        })
+    except Exception as e:
+        print(f"[error] Failed to load model: {e}")
+        sys.exit(1)
 
-    if args.use_train_split:
-        if args.hr_dir == Path(HR_VALID_DIR):
-            args.hr_dir = Path(HR_TRAIN_DIR)
+    # Determine shave size if not provided
+    if args.shave is None:
+        inv_scale = 1.0 / args.scale if args.scale > 0 else 0.0
+        scale_factor = int(round(inv_scale)) if inv_scale > 0 else 0
+        shave = 2 * scale_factor if scale_factor > 0 else 0
+    else:
+        shave = args.shave
+    
+    print(f"Evaluation Shave: {shave} pixels")
 
-    hr_dir = Path(args.hr_dir).expanduser()
-    if not hr_dir.exists():
-        raise FileNotFoundError(f"High-resolution directory not found: {hr_dir}")
+    # Define datasets to evaluate
+    # We look for 'Set14' and 'Urban100' (or 'X2 Urban100' as seen in user image)
+    # We will search for directories that contain these strings
+    
+    target_datasets = ['Set14', 'Urban100']
+    found_datasets = []
+    
+    root = Path(args.test_data_dir)
+    if not root.exists():
+         print(f"[error] Test data root not found: {root}")
+         sys.exit(1)
 
-    hr_files = sorted_alphanumeric(glob.glob(str(hr_dir / "*.png")))
-    if args.limit is not None and args.limit > 0:
-        hr_files = hr_files[:args.limit]
-    if not hr_files:
-        raise ValueError(f"No high-resolution PNG files found in {hr_dir}")
+    # Simple discovery: look for subdirectories
+    subdirs = [d for d in root.iterdir() if d.is_dir()]
+    
+    for target in target_datasets:
+        match = None
+        for d in subdirs:
+            if target.lower() in d.name.lower():
+                match = d
+                break
+        if match:
+            found_datasets.append((target, match))
+        else:
+            print(f"[warn] Dataset '{target}' not found in {args.test_data_dir}")
 
-    eval_ds, total_patches, patch_labels = make_eval_patch_dataset(
-        hr_files,
-        patch_size=args.patch_size,
-        scale=args.scale,
-        batch_size=args.batch_size,
-        stride=args.eval_stride,
-    )
+    if not found_datasets:
+        print("[error] No target datasets found.")
+        sys.exit(1)
 
-    model = load_checkpoint_model(
-        model_path=args.model_path.expanduser(),
-        scale=args.scale,
-        patch_size=args.patch_size,
-        depth_override=args.depth_override,
-    )
+    all_results = []
+    
+    for name, path in found_datasets:
+        dataset_results = evaluate_dataset(model, name, path, args.scale, shave)
+        all_results.extend(dataset_results)
+        
+        # Calculate average for this dataset
+        if dataset_results:
+            avg_psnr = np.mean([r['PSNR'] for r in dataset_results])
+            avg_ssim = np.mean([r['SSIM'] for r in dataset_results])
+            print(f"  -> {name} Average: PSNR={avg_psnr:.4f}, SSIM={avg_ssim:.4f}")
 
-    eval_shave = infer_eval_shave(args.scale, args.eval_shave)
-    summary, per_patch = evaluate(model, eval_ds, eval_shave=eval_shave)
-    attach_filenames(per_patch, patch_labels)
-
-    print(f"Evaluated {summary.samples} patches ({len(hr_files)} images).")
-    print(f"  PSNR(Y):     {summary.psnr_mean:.4f} ± {summary.psnr_std:.4f} dB")
-    print(f"  SSIM(Y):     {summary.ssim_mean:.4f} ± {summary.ssim_std:.4f}")
-    print(f"  MS-SSIM(Y):  {summary.msssim_mean:.4f} ± {summary.msssim_std:.4f}")
-    print(f"  MSE(Y):      {summary.mse_mean:.6f} ± {summary.mse_std:.6f}")
-
-    output_dir = Path(args.output_dir).expanduser()
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_name = args.run_name or f"scale{args.scale:.2f}_{timestamp}"
-    run_dir = output_dir / run_name
-
-    config_payload = {
-        "model_path": str(args.model_path.expanduser()),
-        "scale": args.scale,
-        "hr_dir": str(hr_dir),
-        "patch_size": args.patch_size,
-        "eval_stride": args.eval_stride or args.patch_size,
-        "batch_size": args.batch_size,
-        "limit": args.limit,
-        "eval_shave": eval_shave,
-        "depth_override": args.depth_override,
-        "samples": summary.samples,
-        "images": len(hr_files),
-        "created_at": timestamp,
-    }
-
-    write_outputs(
-        run_dir=run_dir,
-        summary=summary,
-        per_image=per_patch,
-        config=config_payload,
-        write_per_image=not args.skip_per_image,
-    )
-    print(f"[done] Report written to {run_dir}")
-
+    # Save to CSV
+    if all_results:
+        print(f"Saving results to {args.output_csv}...")
+        keys = ['Dataset', 'Filename', 'PSNR', 'SSIM', 'MSE']
+        with open(args.output_csv, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=keys)
+            writer.writeheader()
+            writer.writerows(all_results)
+        print("Done.")
+    else:
+        print("[warn] No results generated.")
 
 if __name__ == "__main__":
     main()
