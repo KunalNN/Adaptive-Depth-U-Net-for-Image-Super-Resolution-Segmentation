@@ -60,7 +60,9 @@ DEFAULT_BASE_CHANNELS = 64
 DEFAULT_RESIDUAL_HEAD_CHANNELS = 64
 
 # --- constants ---
-DATA_LR_SHRINK = 0.5  # To ensure that the low-resolution (LR) input remains consistent across all scales.
+# --- constants ---
+# DATA_LR_SHRINK was removed to allow dynamic scaling via args.scale
+
 
 
 # --------------------------------------------------------------------------- #
@@ -535,7 +537,7 @@ def train(args: argparse.Namespace) -> None:
         train_paths,
         patch_size=patch_size,
         patches_per_image=args.patches_per_image,
-        scale= DATA_LR_SHRINK,
+        scale=args.scale,
         batch_size=args.batch_size,
         seed=args.seed,
         shuffle_buffer=args.shuffle_buffer,
@@ -547,7 +549,8 @@ def train(args: argparse.Namespace) -> None:
         val_fit_ds, val_patch_count, _ = make_eval_patch_dataset(
             val_paths,
             patch_size=patch_size,
-            scale=DATA_LR_SHRINK,
+            patch_size=patch_size,
+            scale=args.scale,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -558,7 +561,8 @@ def train(args: argparse.Namespace) -> None:
         _, test_patch_count, _ = make_eval_patch_dataset(
             test_paths,
             patch_size=patch_size,
-            scale=DATA_LR_SHRINK,
+            patch_size=patch_size,
+            scale=args.scale,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -684,8 +688,9 @@ def train(args: argparse.Namespace) -> None:
             preview_hr_path = train_paths[0]
             preview_hr_image = load_rgb_image_full(preview_hr_path)
             hr_preview_np = random_patches(preview_hr_image, patch_size, count=preview_count, rng=rng)
+
             lr_preview_np = np.stack(
-                [degrade_image(patch, DATA_LR_SHRINK, patch_size) for patch in hr_preview_np],
+                [degrade_image(patch, args.scale, patch_size) for patch in hr_preview_np],
                 axis=0,
             )
             hr_preview = tf.convert_to_tensor(hr_preview_np)
@@ -751,7 +756,8 @@ def train(args: argparse.Namespace) -> None:
         val_eval_ds, _, _ = make_eval_patch_dataset(
             val_paths,
             patch_size=patch_size,
-            scale= DATA_LR_SHRINK,
+            patch_size=patch_size,
+            scale=args.scale,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
@@ -760,7 +766,8 @@ def train(args: argparse.Namespace) -> None:
         test_eval_ds, _, _ = make_eval_patch_dataset(
             test_paths,
             patch_size=patch_size,
-            scale=DATA_LR_SHRINK,
+            patch_size=patch_size,
+            scale=args.scale,
             batch_size=args.batch_size,
             stride=args.eval_stride,
         )
