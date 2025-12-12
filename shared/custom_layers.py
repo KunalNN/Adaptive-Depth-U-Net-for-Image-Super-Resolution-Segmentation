@@ -74,8 +74,10 @@ def custom_depth_from_scale(
 
     return max(min_depth, min(depth, max_depth))
 
-def estimate_bottleneck_size(hr: int, scale: float, depth: int) -> int:
+def estimate_bottleneck_size(hr: int | None, scale: float, depth: int) -> int:
     """Compute the spatial extent at the bottleneck for diagnostics."""
+    if hr is None:
+        return 0
     size = hr
     for _ in range(depth):
         size = max(1, int(round(size * scale)))
@@ -140,3 +142,19 @@ class ClippedResidualAdd(L.Layer):
 
 # Backward compatibility alias for legacy checkpoints and configs.
 ClipAdd = ClippedResidualAdd
+
+
+@register_keras_serializable(package="metrics")
+def psnr_metric(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
+    return tf.reduce_mean(tf.image.psnr(y_true, y_pred, max_val=1.0))
+
+
+@register_keras_serializable(package="losses")
+def charbonnier_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    epsilon = tf.constant(1e-3, dtype=tf.float32)
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    diff = y_true - y_pred
+    return tf.reduce_mean(tf.sqrt(tf.square(diff) + tf.square(epsilon)))

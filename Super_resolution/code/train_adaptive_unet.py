@@ -15,6 +15,7 @@ import argparse
 import glob
 import json
 import math
+import os
 from datetime import datetime
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -34,6 +35,8 @@ from shared.custom_layers import (
     ResizeToMatch,
     estimate_bottleneck_size,
     custom_depth_from_scale,
+    charbonnier_loss,
+    psnr_metric,
 )
 from shared.pipeline import (
     load_rgb_image_full,
@@ -41,6 +44,7 @@ from shared.pipeline import (
     make_training_patch_dataset,
     random_patches,
     degrade_image,
+    rgb_to_luma_bt601,
 )
 
 # Science cluster enables XLA globally; Resize ops lack an XLA kernel, so disable JIT.
@@ -248,20 +252,7 @@ def degrade_to_lr_tf(hr_image: tf.Tensor, scale: float, output_size: int) -> tf.
     return tf.clip_by_value(restored, 0.0, 1.0)
 
 
-def rgb_to_luma_bt601(image: tf.Tensor) -> tf.Tensor:
-    """
-    Convert an RGB tensor in [0, 1] to its BT.601 luminance channel in [0, 1].
 
-    Parameters
-    ----------
-    image
-        Tensor shaped (N, H, W, 3) or (H, W, 3) containing RGB values normalised to [0, 1].
-    """
-    image = tf.cast(image, tf.float32)
-    coeffs = tf.constant([65.481, 128.553, 24.966], dtype=tf.float32)
-    coeffs = tf.reshape(coeffs, [1, 1, 1, 3])
-    y_channel = tf.reduce_sum(image * coeffs, axis=-1, keepdims=True) + 16.0
-    return tf.clip_by_value(y_channel / 255.0, 0.0, 1.0)
 
 
 def build_dataset(
@@ -411,22 +402,7 @@ def build_losses_and_metrics(loss_name: str) -> Tuple[tf.keras.losses.Loss, List
     """
     loss_key = loss_name.lower()
 
-    def psnr_metric(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(tf.clip_by_value(y_pred, 0.0, 1.0), tf.float32)
-        return tf.reduce_mean(tf.image.psnr(y_true, y_pred, max_val=1.0))
-
     if loss_key == "charbonnier":
-        epsilon = tf.constant(1e-3, dtype=tf.float32)
-
-        def charbonnier_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            diff = y_true - y_pred
-            return tf.reduce_mean(tf.sqrt(tf.square(diff) + tf.square(epsilon)))
-
-        charbonnier_loss.__name__ = "charbonnier_loss"
-        psnr_metric.__name__ = "psnr"
         return charbonnier_loss, [psnr_metric]
 
     if loss_key == "l1":
@@ -436,7 +412,7 @@ def build_losses_and_metrics(loss_name: str) -> Tuple[tf.keras.losses.Loss, List
             return tf.reduce_mean(tf.abs(y_true - y_pred))
 
         l1_loss.__name__ = "l1_loss"
-        psnr_metric.__name__ = "psnr"
+        l1_loss.__name__ = "l1_loss"
         return l1_loss, [psnr_metric]
 
     if loss_key == "combined":
@@ -507,7 +483,7 @@ def train(args: argparse.Namespace) -> None:
     if args.initial_epoch < 0:
         raise ValueError("initial_epoch must be non-negative.")
     if args.initial_epoch >= args.epochs:
-        raise ValueError("initial_epoch must be smaller than --epochs to resume training.")
+        print("[info] initial_epoch >= epochs; training will be skipped, proceeding to evaluation.")
 
     high_res_dir_input = args.high_res_dir or DEFAULT_HIGH_RES_DIR
     high_res_dir = Path(high_res_dir_input).expanduser()
@@ -553,7 +529,6 @@ def train(args: argparse.Namespace) -> None:
         val_fit_ds, val_patch_count, _ = make_eval_patch_dataset(
             val_paths,
             patch_size=patch_size,
-            patch_size=patch_size,
             scale=args.scale,
             batch_size=args.batch_size,
             stride=args.eval_stride,
@@ -564,7 +539,6 @@ def train(args: argparse.Namespace) -> None:
     if test_paths:
         _, test_patch_count, _ = make_eval_patch_dataset(
             test_paths,
-            patch_size=patch_size,
             patch_size=patch_size,
             scale=args.scale,
             batch_size=args.batch_size,
@@ -739,17 +713,21 @@ def train(args: argparse.Namespace) -> None:
         epoch_timer,
     ]
 
-    history = model.fit(
-        train_ds,
-        epochs=args.epochs,
-        initial_epoch=args.initial_epoch,
-        steps_per_epoch=steps_per_epoch,
-        validation_data=val_fit_ds if val_fit_ds is not None else None,
-        validation_steps=val_steps if val_fit_ds is not None else None,
-        validation_freq=1,
-        callbacks=callbacks,
-        verbose=2,
-    )
+    if args.initial_epoch < args.epochs:
+        history = model.fit(
+            train_ds,
+            epochs=args.epochs,
+            initial_epoch=args.initial_epoch,
+            steps_per_epoch=steps_per_epoch,
+            validation_data=val_fit_ds if val_fit_ds is not None else None,
+            validation_steps=val_steps if val_fit_ds is not None else None,
+            validation_freq=1,
+            callbacks=callbacks,
+            verbose=2,
+        )
+    else:
+        history = None
+        print("Skipping training loop as initial_epoch >= epochs.")
 
     print("Training complete.")
     print(f"Model info: {info}")
@@ -762,16 +740,15 @@ def train(args: argparse.Namespace) -> None:
     
     model_size_path = run_dir / "model_size.csv"
     with open(model_size_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Scale", "Params", "Size_MB"])
-        writer.writerow([args.scale, total_params, size_mb])
+        csv_writer = csv.writer(f)
+        csv_writer.writerow(["Scale", "Params", "Size_MB"])
+        csv_writer.writerow([args.scale, total_params, size_mb])
     print(f"Model size saved to: {model_size_path}")
 
     eval_targets: List[Tuple[str, tf.data.Dataset]] = []
     if val_paths:
         val_eval_ds, _, _ = make_eval_patch_dataset(
             val_paths,
-            patch_size=patch_size,
             patch_size=patch_size,
             scale=args.scale,
             batch_size=args.batch_size,
@@ -781,7 +758,6 @@ def train(args: argparse.Namespace) -> None:
     if test_paths:
         test_eval_ds, _, _ = make_eval_patch_dataset(
             test_paths,
-            patch_size=patch_size,
             patch_size=patch_size,
             scale=args.scale,
             batch_size=args.batch_size,
@@ -821,7 +797,13 @@ def train(args: argparse.Namespace) -> None:
 
             psnr_vals.append(tf.image.psnr(hr_y, pred_y, max_val=1.0).numpy())
             ssim_vals.append(tf.image.ssim(hr_y, pred_y, max_val=1.0).numpy())
-            msssim_vals.append(tf.image.ssim_multiscale(hr_y, pred_y, max_val=1.0).numpy())
+            
+            # MS-SSIM requires at least 176x176 (11 * 2^4)
+            if hr_y.shape[1] >= 176 and hr_y.shape[2] >= 176:
+                msssim_vals.append(tf.image.ssim_multiscale(hr_y, pred_y, max_val=1.0).numpy())
+            else:
+                # Append NaN or 0.0 if image is too small
+                msssim_vals.append(np.full((hr_y.shape[0],), np.nan))
             mse_vals.append(
                 tf.reduce_mean(tf.square(hr_y - pred_y), axis=[1, 2, 3]).numpy()
             )
@@ -829,7 +811,11 @@ def train(args: argparse.Namespace) -> None:
 
         def mean_std(values: List[np.ndarray]) -> Tuple[float, float]:
             arr = np.concatenate(values, axis=0).astype(np.float64)
-            return float(np.mean(arr)), float(np.std(arr))
+            # Cap infinite PSNR at 100.0 dB (implies perfect reconstruction)
+            if np.any(np.isinf(arr)):
+                arr[np.isinf(arr)] = 100.0
+            # Use nanmean/nanstd to ignore NaNs (e.g. from MS-SSIM on small patches)
+            return float(np.nanmean(arr)), float(np.nanstd(arr))
 
         if not psnr_vals:
             print(f"{name}: no samples, skipping metric aggregation.")
@@ -862,7 +848,20 @@ def train(args: argparse.Namespace) -> None:
         test_data_dir = Path(args.test_data_dir).expanduser()
         if test_data_dir.exists():
             print(f"[info] Running evaluation on test data from: {test_data_dir}")
-            test_images = sorted_alphanumeric(glob.glob(str(test_data_dir / f"*{image_suffix}")))
+            
+            # Recursive search for images
+            test_images = []
+            for root, _, files in os.walk(test_data_dir):
+                for file in files:
+                    if file.endswith(image_suffix):
+                        test_images.append(os.path.join(root, file))
+            
+            # Filter for HR images if present (common convention)
+            hr_images = [p for p in test_images if "HR" in Path(p).name]
+            if hr_images:
+                test_images = hr_images
+                
+            test_images = sorted_alphanumeric(test_images)
             
             if not test_images:
                 print(f"[warn] No images found in {test_data_dir} with suffix {image_suffix}")
@@ -910,12 +909,16 @@ def train(args: argparse.Namespace) -> None:
                             
             
                 
-                            lr_image = degrade_to_lr_tf(hr_image, args.scale, h) # This function name is slightly misleading, it returns degraded then upsampled? 
+                            lr_image = degrade_to_lr_tf(hr_image, args.scale, h) 
+
+                            print(f"[DEBUG] Evaluating {img_path}")
+                            print(f"[DEBUG] patch_size: {patch_size}, scale: {args.scale}")
+                            print(f"[DEBUG] Image shape: {hr_image.shape}")
 
                             ds, _, _ = make_eval_patch_dataset(
                                 [img_path],
                                 patch_size=patch_size,
-                                scale=DATA_LR_SHRINK,
+                                scale=args.scale,
                                 batch_size=1, # Process patches one by one
                                 stride=args.eval_stride or patch_size
                             )

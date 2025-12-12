@@ -1,0 +1,9 @@
+scale=0.20
+batch_size=16
+depth=3
+patch_size=64
+epochs=60
+run_name=Scale_0.20_Experiment_1
+log_dir=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/final_data/Experiment_1/Scale_0.20_Experiment_1
+model_dir=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/Experiment_1/Scale_0.20_Experiment_1
+submitted=2025-12-12T10:20:30+01:00

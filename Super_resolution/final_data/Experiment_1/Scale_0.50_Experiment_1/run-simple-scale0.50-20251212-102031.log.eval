@@ -1,0 +1,19 @@
+2025-12-12 12:38:30.655809: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-12-12 12:38:30.722484: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2025-12-12 12:38:35.640655: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+Loading model from /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/models/Experiment_1/Scale_0.50_Experiment_1/unet_adaptive_scale_new_loss0.50_depth3.keras...
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1765539519.802670 1141809 gpu_device.cc:2020] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 9583 MB memory:  -> device: 0, name: NVIDIA GeForce RTX 2080 Ti, pci bus id: 0000:1a:00.0, compute capability: 7.5
+/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/.venv/lib/python3.10/site-packages/keras/src/saving/saving_lib.py:797: UserWarning: Skipping variable loading for optimizer 'adam', because it has 146 variables whereas the saved optimizer has 150 variables. 
+  saveable.load_own_variables(weights_store.get(inner_path))
+Rebuilding model with flexible input shape (depth=3)...
+Model rebuilt successfully with flexible input shape.
+Evaluation Shave: 4 pixels
+Evaluating on Set14 from /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/test_data/Set14...
+2025-12-12 12:38:44.184665: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:473] Loaded cuDNN version 91700
+  -> Set14 Average: PSNR=32.4274, SSIM=0.9051
+Evaluating on Urban100 from /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/test_data/Urban100...
+  -> Urban100 Average: PSNR=29.8797, SSIM=0.9076
+Saving results to /home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/experiment1/evaluation/Scale_0.50_Experiment_1_eval_summary.csv...
+Done.

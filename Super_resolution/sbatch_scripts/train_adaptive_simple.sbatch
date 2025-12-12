@@ -19,8 +19,8 @@ set -euo pipefail
 REPO_DIR="/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation"
 SR_DIR="$REPO_DIR/Super_resolution"
 PY_SCRIPT="$SR_DIR/code/train_adaptive_unet.py"
-PYTHON_BIN="$SR_DIR/.venv/bin/python"
-VENV_ACTIVATE="$SR_DIR/.venv/bin/activate"
+PYTHON_BIN="$REPO_DIR/.venv/bin/python"
+VENV_ACTIVATE="$REPO_DIR/.venv/bin/activate"
 
 # Check if Python interpreter exists
 if [[ ! -x "$PYTHON_BIN" ]]; then
@@ -103,7 +103,7 @@ EVAL_OUTPUT_DIR="${EVAL_OUTPUT_DIR:-$SR_DIR/logs/experiment1/evaluation}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-$BATCH_SIZE}"
 SUMMARY_ARCHIVE_DIR="${SUMMARY_ARCHIVE_DIR:-$SR_DIR/logs/experiment_1}"
 
-TEST_DATA_DIR="${TEST_DATA_DIR:-$SR_DIR/test_data/X2}"
+TEST_DATA_DIR="${TEST_DATA_DIR:-$SR_DIR/test_data}"
 
 # ------------------------------- Training Execution -------------------------------
 
@@ -246,20 +246,19 @@ else
   checkpoint_base="$(basename "$checkpoint_path" .keras)"
   eval_run_name="${RUN_NAME:-$checkpoint_base}_eval"
   eval_log="${RUN_LOG}.eval"
-  EVAL_CMD=(
-    "$PYTHON_BIN" -u "$SR_DIR/code/evaluate_model.py"
-    --model-path "$checkpoint_path"
-    --scale "$SCALE"
-    --patch-size "$PATCH_SIZE"
-    --batch-size "$EVAL_BATCH_SIZE"
-    --output-dir "$EVAL_OUTPUT_DIR"
-    --run-name "$eval_run_name"
-  )
-  if [[ ${#DEPTH_OVERRIDE_ARG[@]} -gt 0 ]]; then
-    EVAL_CMD+=("${DEPTH_OVERRIDE_ARG[@]}")
+  if [[ ! -d "$TEST_DATA_DIR" ]]; then
+    echo "[warn] Test data directory not found at $TEST_DATA_DIR. Skipping evaluation."
+  else
+    EVAL_CMD=(
+      "$PYTHON_BIN" -u "$SR_DIR/code/evaluate_model.py"
+      --model_path "$checkpoint_path"
+      --scale "$SCALE"
+      --test_data_dir "$TEST_DATA_DIR"
+      --output_csv "$EVAL_OUTPUT_DIR/${eval_run_name}_summary.csv"
+    )
+    echo "[simple-eval] ${EVAL_CMD[*]}"
+    "${EVAL_CMD[@]}" 2>&1 | tee "$eval_log"
   fi
-  echo "[simple-eval] ${EVAL_CMD[*]}"
-  "${EVAL_CMD[@]}" 2>&1 | tee "$eval_log"
 fi
 
 echo "Finished at: $(date)"

@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 
-# Launch Experiment 1: fixed depth (3 levels) while sweeping the requested
-# reconstruction scale. Each sbatch submission reuses train_adaptive_simple.sbatch
-# and pins the encoder depth to three levels by passing --depth_override 3.
+#SBATCH -A cseduproject
+#SBATCH --partition=csedu
+#SBATCH --qos=csedu-normal
+#SBATCH --gres=gpu:1
+#SBATCH -c 4
+#SBATCH --mem=31G
+#SBATCH --time=12:00:00
+#SBATCH -J unet-train-simple
+#SBATCH --output=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out
+#SBATCH --error=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out
 
 # ------------------------------- Setup -------------------------------
 

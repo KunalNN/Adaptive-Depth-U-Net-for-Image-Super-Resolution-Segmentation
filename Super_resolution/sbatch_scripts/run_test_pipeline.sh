@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 
-# Launch a single-epoch test run to verify the entire pipeline (Training + Evaluation).
+#SBATCH -A cseduproject
+#SBATCH --partition=csedu
+#SBATCH --qos=csedu-normal
+#SBATCH --gres=gpu:1
+#SBATCH -c 4
+#SBATCH --mem=31G
+#SBATCH --time=12:00:00
+#SBATCH -J unet-train-simple
+#SBATCH --output=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out
+#SBATCH --error=/home/knarwani/thesis/git/Adaptive-Depth-U-Net-for-Image-Super-Resolution-Segmentation/Super_resolution/logs/slurm-%x-%j.out
 
 set -euo pipefail
 
@@ -40,20 +49,21 @@ echo "Submitting TEST Training Job..."
 echo "  -> Scale: $SCALE, Depth: $DEPTH, Epochs: $EPOCHS"
 
 # Submit Training
-train_job_output=$(sbatch "$SBATCH_SCRIPT")
-train_job_id=$(echo "$train_job_output" | awk '{print $4}')
-echo "     Training Job ID: $train_job_id"
+# train_job_output=$(sbatch "$SBATCH_SCRIPT")
+# train_job_id=$(echo "$train_job_output" | awk '{print $4}')
+# echo "     Training Job ID: $train_job_id"
 
 # Export Variables for Evaluation
-export MODEL_PATH="$model_dir/best_model.keras"
+# Find the actual model file (since name includes loss/depth)
+export MODEL_PATH=$(ls "$model_dir"/*.keras | head -n 1)
 export TEST_DATA_DIR="$PROJECT_ROOT/test_data"
 export OUTPUT_CSV="$log_dir/evaluation_summary.csv"
 
 echo "Submitting TEST Evaluation Job..."
 
-# Submit Evaluation (Dependent on Training)
-eval_job_output=$(sbatch --dependency=afterok:$train_job_id "$EVAL_SBATCH_SCRIPT")
+# Submit Evaluation (No dependency since training is skipped)
+eval_job_output=$(sbatch "$EVAL_SBATCH_SCRIPT")
 eval_job_id=$(echo "$eval_job_output" | awk '{print $4}')
-echo "     Evaluation Job ID: $eval_job_id (depends on $train_job_id)"
+echo "     Evaluation Job ID: $eval_job_id"
 
 echo "Test pipeline submitted. Monitor with 'squeue -u $USER'."
